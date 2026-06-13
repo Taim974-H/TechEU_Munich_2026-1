@@ -866,14 +866,18 @@ Prioritize in this order:
 * Developer 2: ✓ scenario lookup for exact canonical requirements, richer audit narrative, specific supplier reasons, multi-violation round-2 counters, violation-aware seller alternatives, "best we can do" honesty when no alternative exists.
 * Developer 3: add Pioneer/Tavily/fal wrappers and fallback responses.
 
-#### Hour 5–7: First integration merge
+#### Hour 5–7: First integration merge ✓ COMPLETE
 
-* Merge data, backend, and frontend into `staging-demo`.
-* Achieve minimum flow:
-
-```text
-Buyer request → requirements → matched sellers → validation → recommendation
-```
+* ✓ `staging-demo` branch created from `main`, `feature/orchestrator-agents` fast-forward merged (no conflicts).
+* ✓ `streamlit_app.py` fully wired to `run_demo()` with all integration fixes:
+  - Scenario selector (REQ-001/002/003 + Custom) — canonical Supabase lookup for known scenarios, regex for custom text.
+  - `st.session_state` result persistence — page never resets on radio click.
+  - Interactive approval: Approve/Reject radio with confirmation message.
+  - Validation table resolves `seller_id` → full `seller_name` from `matched_suppliers`.
+  - Pioneer labels shown only on seller messages (buyer message label clutter removed).
+  - `st.metric` reason moved to `st.caption` (was broken as delta arg).
+* ✓ Minimum flow working end-to-end in browser:
+  `Buyer request → requirements → matched sellers → negotiation timeline → validation → audit → recommendation → human approval`
 
 #### Hour 7–10: Parallel build block 3
 
@@ -974,7 +978,7 @@ All files exist and the end-to-end demo flow runs in `DEMO_MODE=true` with no AP
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| `streamlit_app.py` | Scaffolded | Full UI wired to `run_demo()` |
+| `streamlit_app.py` | Working / Integrated | Scenario selector, session_state persistence, interactive approval, validated seller names |
 | `backend/orchestrator.py` | Working | Applies value scores, passes `best_offer` to escalation |
 | `backend/schemas.py` | Complete | All TypedDicts match Section 8 contracts |
 | `procurement_intelligence.py` | Working | Regex extraction + deterministic validation + `compute_value_score()` |
