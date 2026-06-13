@@ -17,167 +17,172 @@ Use this file as the persistent working context for Claude Code in the **Pactum*
 * Assume the human buyer wants a trustworthy procurement recommendation, not a fully autonomous purchase.
 * Keep the human in control for final approval, risk decisions, and budget exceptions.
 
-### Demo win condition
+### Demo win condition (updated after reviewer feedback)
 
 The demo wins if a judge can clearly see:
 
-* A human enters a messy procurement request.
-* The system extracts structured requirements.
-* The Supplier Matching Agent ranks vendors.
-* The Buyer Agent negotiates with multiple Seller Agents.
-* The Procurement Intelligence Agent validates offers against technical constraints.
+* A human enters a real procurement request and clicks one button.
+* The agent feed runs **in real time, line by line** — LLM calls happen live and visibly.
+* The system extracts structured requirements via Gemini.
+* Products are clustered by spec similarity across all seller inventories.
+* A Judging Agent evaluates each candidate and **explains in natural language** why something is good, borderline, or bad.
+* The Negotiation Agent generates **live, non-preset dialogue** with modular sub-agents (price, delivery, warranty, risk) constrained by guardrails.
 * Pioneer labels seller messages and extracts offer fields.
 * Tavily enriches missing supplier/spec information when needed.
 * fal creates a visual procurement deal card.
-* The Human Escalation Subagent asks for approval.
+* A mid-process human alert pauses the flow inline — the user confirms or adjusts before the run continues.
 * The Audit/Summary Subagent explains the final recommendation.
+* The reviewer can open the backend code and see real LLM calls, not file reads.
 
-Optimize for a working, reliable, visual end-to-end demo.
+Optimize for visible intelligence, real-time computation, and a working end-to-end demo.
 
 ---
 
 ## 2. Architecture
 
-Use this architecture:
+### Current architecture (what is live as of this commit)
 
 ```text
 Human Buyer
    ↓
-Streamlit Frontend Dashboard
+Next.js 15 Frontend (primary UI)  ←→  Streamlit (legacy UI, fallback)
    ↓
-backend/orchestrator.py
+FastAPI backend/api.py
+  POST /api/run-demo
+  GET  /api/scenarios
    ↓
-Procurement Intelligence Agent
-   ├─ Extract structured requirements
-   └─ Validate technical/commercial constraints
+backend/orchestrator.py  run_demo(request) → DemoResult
    ↓
-Supplier Matching Agent
-   ├─ Search local seller registry/inventory
-   ├─ Rank vendors
-   └─ Call Tavily fallback if internal data is insufficient
+Procurement Intelligence Agent   ← extract_requirements() + validate_offer()
    ↓
-Buyer Agent ↔ Seller Agents
-   ├─ Negotiate price, delivery, warranty, alternatives
-   └─ Store conversation logs
+Product Clustering (spec-similarity)   ← NEW: cluster_products()
+   ↓
+Supplier Matching Agent              ← BM25-style scoring from seller_registry
+   ↓
+Judging Agent                        ← NEW: judge_candidates() with Gemini reasoning
+   ↓
+Negotiation Agent                    ← NEW: live Gemini dialogue, modular sub-agents
+  ├─ Price sub-agent
+  ├─ Delivery sub-agent
+  ├─ Warranty sub-agent
+  └─ Risk sub-agent (guardrails applied)
    ↓
 Pioneer Inference Layer
-   ├─ Classify seller messages
-   ├─ Extract price/delivery/warranty/product fields
-   └─ Detect risk labels
+  ├─ Classify seller messages
+  ├─ Extract price/delivery/warranty/product fields
+  └─ Detect risk labels
    ↓
 Human Escalation Subagent
-   ├─ Detect approval/risk/budget triggers
-   └─ Produce human approval question
+  ├─ Inline mid-process alert in agent feed
+  └─ Email-based loop (Gemini AI Studio + Gmail, stretch)
    ↓
-Audit/Summary Subagent
-   ├─ Summarize negotiation
-   ├─ Explain rejected offers
-   └─ Recommend final vendor
+Audit/Summary Subagent (Gemini-written narrative)
    ↓
 fal Deal Card Generator
    ↓
-Human Approval Dashboard
+Human Approval Dashboard (Next.js)
 ```
 
-### Data flow
+### Target streaming data flow (new_plan.md Phase 1–3)
 
 ```text
-Text buyer request
-→ Streamlit form
-→ run_demo(request)
-→ structured_requirements
-→ matched_suppliers
-→ seller_negotiations
-→ pioneer_labels
-→ validation_results
-→ escalation_result
-→ audit_summary
-→ final_recommendation
-→ fal_deal_card
-→ Streamlit dashboard response
+Buyer request (Next.js form)
+→ GET /api/run-demo/stream  (SSE)
+→ events: requirements · cluster · match · negotiation_turn (per LLM line) ·
+          validation · human_alert (pauses) · escalation · recommendation · audit · done
+→ ActivityFeed renders events live as they arrive
+→ done event carries full DemoResult → existing section components hydrate
+→ POST /api/human-response  (mid-flow resume)
 ```
 
-### Multimodal handling
+### Replay/fallback data flow (DEMO_MODE=true)
 
-* Treat Version 1 as **text-first**.
-* Use fal for generated visual output: the final procurement deal card.
-* Do not build PDF/image ingestion unless the core demo is already stable.
-* Future multimodal inputs may include product spec PDFs, component images, catalog screenshots, or procurement documents.
+```text
+Buyer request
+→ POST /api/run-demo  (non-streaming, existing route, kept)
+→ run_demo() drains the same generator → DemoResult (from saved transcript)
+→ All section components hydrate from DemoResult as before
+```
 
 ---
 
 ## 3. Tech Stack
 
-### Frontend
+### Primary Frontend
 
-* Use **Streamlit** for the dashboard.
-* Keep frontend code in `streamlit_app.py`.
-* Use simple Python UI components, cards, tables, expanders, and status indicators.
-* Prefer fast UI clarity over custom styling complexity.
+* **Next.js 15** — primary UI for judges and the CTO.
+* Keep all primary frontend code in `frontend/`.
+* Components: `AgentNetwork`, `ActivityFeed`, `NegotiationThreads`, `ValidationTable`, `EscalationBanner`, `FinalRecommendation`, `DealCard`, `TavilyCard`, `AuditSummary`, `RequestForm`, `SupplierGrid`, `StructuredRequirements`.
+* Three views: buyer-side (clean request + result), orchestration (all agent comms, default), seller-inventory (nested product data).
+* Show full orchestration to everyone — no complexity toggle.
+
+### Legacy Frontend
+
+* **Streamlit** (`streamlit_app.py`) — secondary UI, kept functional as a fallback.
+* Do not invest in Streamlit after the Next.js integration is stable.
 
 ### Backend
 
-* Use **Python** modules and classes.
+* **FastAPI** (`backend/api.py`) — serves both UIs.
+  * `POST /api/run-demo` — non-streaming, returns full `DemoResult`.
+  * `GET /api/run-demo/stream` — SSE streaming, emits events line by line.
+  * `POST /api/human-response` — mid-flow human reply to resume a paused stream.
+  * `GET /api/scenarios` — returns buyer blueprints for the scenario selector.
 * Keep orchestration in `backend/orchestrator.py`.
 * Keep agent logic in `backend/agents/`.
-* Do not add FastAPI unless explicitly needed.
-* Do not introduce heavy frameworks after the first integration point.
+
+### LLM
+
+* **Gemini** (`integrations/gemini_client.py`) — primary LLM for:
+  * Requirement extraction (structured JSON from free-text).
+  * Negotiation dialogue generation (per turn, live).
+  * Judging agent reasoning (candidate evaluation narrative).
+  * Audit summary generation.
+* Use `google-genai` SDK. Read key from `LLM_API_KEY` with `LLM_PROVIDER=gemini`.
+* Timeout: 15–20s. Retry once. Fallback to templated/deterministic output.
+* **Never let Gemini override deterministic validation** for length, power, price, delivery, or warranty.
 
 ### Data
 
-* Use JSON files for synthetic data, fallback data, and demo mode.
-* Keep demo data in `data/`.
-* Keep generated or static fallback outputs in `integrations/fallback_outputs.py` or `data/`.
+* Keep product and inventory data in `data/` as JSON (with Supabase sync).
+* **Delete all pre-written conversation/dialogue data** (see Section 11).
+* Seller inventory restructured to nested: `merchants[] → inventories[] → products[]`.
+* Buyer blueprints replace old buyer_scenarios (strip `structured_requirements` — extracted live now).
 
 ### ML / model layer
 
-* Use **Pioneer** for:
-
-  * Synthetic buyer/seller/inventory/negotiation data generation.
-  * Runtime inference on seller messages.
-  * Classification, extraction, and risk labeling.
-* Use **Tavily** for:
-
-  * External supplier discovery.
-  * Product spec lookup.
-  * Missing data enrichment.
-  * Price benchmarking.
-* Use **fal** for:
-
-  * Final visual procurement deal card generation.
-* Use deterministic Python validation for:
-
-  * Size checks.
-  * Power checks.
-  * Budget checks.
-  * Delivery checks.
-  * Warranty checks.
+* **Gemini**: requirement extraction, negotiation dialogue, judging reasoning, audit summary.
+* **Pioneer**: post-hoc labeling of generated seller messages; risk classification.
+* **Tavily**: external supplier discovery; product spec enrichment; price benchmarking.
+* **fal**: final visual procurement deal card generation.
+* **Deterministic Python**: all hard constraint checks (length, power, price, delivery, warranty). Never delegated to an LLM.
 
 ### External APIs
 
-* Pioneer: synthetic data + runtime inference.
+* Gemini: primary LLM backbone.
+* Pioneer: runtime inference on generated messages.
 * Tavily: search/enrichment fallback.
 * fal: visual deal card.
 * Aikido: dependency/security scan outside the runtime app.
 
 ### Serving
 
-* Serve locally with Streamlit.
-* Do not prioritize deployment unless the local demo is stable.
+* Primary: `uvicorn backend.api:app --reload --port 8000` + `cd frontend && npm run dev`.
+* Legacy fallback: `streamlit run streamlit_app.py`.
 
 ---
 
 ## 4. Directory Structure
 
-Use this repository structure:
-
 ```text
 pactum/
 │
-├── streamlit_app.py          ✓ scaffolded — full dashboard wired to run_demo()
+├── streamlit_app.py          ✓ working — legacy UI, wired to run_demo()
 ├── README.md
 ├── CLAUDE.md
 ├── PLAN.md
+├── new_plan.md               ✓ updated plan post-reviewer feedback
+├── to_do_left.md             ✓ confirmed gap list before new_plan
 ├── requirements.txt          ✓ created
 ├── .env                      ✓ created (git-ignored)
 ├── .env.example              ✓ created
@@ -185,34 +190,70 @@ pactum/
 │
 ├── backend/
 │   ├── __init__.py           ✓
-│   ├── orchestrator.py       ✓ scaffolded — run_demo() end-to-end flow
-│   ├── schemas.py            ✓ scaffolded — all TypedDicts
+│   ├── api.py                ✓ FastAPI — POST /run-demo, GET /scenarios, + streaming routes (new)
+│   ├── orchestrator.py       ✓ run_demo() — upgrading to event emitter
+│   ├── schemas.py            ✓ all TypedDicts
+│   ├── data_access.py        ✓ Supabase + local JSON fallback
 │   └── agents/
 │       ├── __init__.py       ✓
-│       ├── procurement_intelligence.py  ✓ scaffolded — extract_requirements() + validate_offer()
-│       ├── supplier_matching.py         ✓ scaffolded — BM25-style scoring from local JSON
-│       ├── buyer_agent.py               ✓ scaffolded — 2-round negotiation loop
-│       ├── seller_agent.py              ✓ scaffolded — inventory search + alternative logic
-│       ├── human_escalation.py          ✓ scaffolded — escalation triggers + question
-│       └── audit_summary.py             ✓ scaffolded — human-readable summary narrative
+│       ├── procurement_intelligence.py  ✓ validate_offer() + compute_value_score() (keep)
+│       │                                   extract_requirements() → Gemini (rewrite)
+│       │                                   _get_scenario_lookup() → DELETE
+│       ├── product_clustering.py        NEW cluster_products() — spec-similarity grouping
+│       ├── supplier_matching.py         ✓ BM25-style scoring (keep or fold into clustering)
+│       ├── judging_agent.py             NEW judge_candidates() — Gemini per-candidate reasoning
+│       ├── negotiation_agent.py         NEW replaces buyer_agent + seller_agent
+│       ├── negotiation/
+│       │   ├── price.py                 NEW price sub-agent
+│       │   ├── delivery.py              NEW delivery sub-agent
+│       │   ├── warranty.py              NEW warranty sub-agent
+│       │   ├── risk.py                  NEW risk sub-agent
+│       │   └── guardrails.py            NEW god-rails: system-prompt constraints + post-gen check
+│       ├── buyer_agent.py               RETIRING → replaced by negotiation_agent.py
+│       ├── seller_agent.py              RETIRING → replaced by negotiation_agent.py
+│       ├── human_escalation.py          ✓ escalation triggers (keep); add pause/resume hook
+│       └── audit_summary.py             ✓ keep; switch narrative to Gemini
 │
 ├── integrations/
 │   ├── __init__.py           ✓
-│   ├── pioneer_client.py     ✓ scaffolded — HTTP wrapper + fallback
-│   ├── tavily_client.py      ✓ scaffolded — TavilyClient wrapper + fallback
-│   ├── fal_client.py         ✓ scaffolded — fal_client wrapper + fallback
-│   └── fallback_outputs.py   ✓ scaffolded — static fallbacks for all three APIs
+│   ├── gemini_client.py      NEW generate(prompt, system, temperature, json_mode) → str
+│   ├── pioneer_client.py     ✓ HTTP wrapper + fallback
+│   ├── tavily_client.py      ✓ TavilyClient wrapper + fallback
+│   ├── fal_client.py         ✓ fal_client wrapper + fallback
+│   ├── fallback_outputs.py   ✓ static fallbacks for Pioneer, Tavily, fal
+│   └── email_hitl.py         NEW (stretch) Gemini AI Studio + Gmail loop
+│
+├── frontend/                 ✓ Next.js 15 primary UI
+│   ├── src/
+│   │   ├── app/page.tsx      ✓ main page; switch to streaming ActivityFeed
+│   │   ├── lib/
+│   │   │   ├── api.ts        ✓ runDemo() + getScenarios() (keep for replay)
+│   │   │   ├── stream.ts     NEW EventSource client → pushes events into React state
+│   │   │   ├── demoMachine.ts ✓ stage/reveal machine (keep; extend for stream events)
+│   │   │   ├── types.ts      ✓ TypeScript interfaces (add clusters[], judged_candidates[])
+│   │   │   └── mockData.ts   ✓ kept for replay/fallback
+│   │   └── components/
+│   │       ├── sections/     ✓ all section components (no breaking changes to keys)
+│   │       ├── AgentNetwork.tsx  ✓ add labeled edges + hover popup per event
+│   │       └── ActivityFeed.tsx  ✓ upgrade to append-on-event; inline human alert
+│   └── .env.local.example    NEW NEXT_PUBLIC_API_URL=http://localhost:8000
 │
 ├── data/
-│   ├── buyer_scenarios.json        ✓ 3 buyer scenarios
-│   ├── seller_registry.json        ✓ 5 seller profiles
-│   ├── seller_inventory.json       ✓ 9 products across vendors
-│   ├── synthetic_negotiations.json ✓ 3 full negotiation examples with Pioneer labels
-│   └── tavily_fallback_results.json ✓ saved fallback search results
+│   ├── seller_registry.json        ✓ 5 vendor profiles (keep)
+│   ├── seller_inventory.json       ✓ restructure to nested merchants→inventories→products
+│   ├── buyer_scenarios.json        → rebuild as blueprints (strip structured_requirements)
+│   ├── tavily_fallback_results.json ✓ keep
+│   ├── synthetic_negotiations.json  DELETE (pre-written dialogue)
+│   ├── edge_cases.json              DELETE (canned outputs)
+│   ├── audit_summaries.json         DELETE (precomputed)
+│   ├── validation_results.json      DELETE (precomputed)
+│   ├── escalation_results.json      DELETE (precomputed)
+│   ├── final_recommendations.json   DELETE (precomputed)
+│   └── pioneer_inference_examples.json DELETE (precomputed)
 │
 ├── assets/
 │   ├── fal_deal_card.png     (place fallback image here before demo)
-│   └── screenshots/          ✓ directory created
+│   └── screenshots/          ✓ directory created (Aikido screenshot goes here)
 │
 ├── security/
 │   └── aikido_notes.md       ✓ created
@@ -235,23 +276,46 @@ python -m venv .venv
 source .venv/bin/activate
 ```
 
-On Windows:
-
-```bash
-python -m venv .venv
-.venv\Scripts\activate
-```
-
 ### Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### Run development server
+### Run the full stack (primary — Next.js + FastAPI)
+
+Terminal 1 — FastAPI backend:
+
+```bash
+uvicorn backend.api:app --reload --port 8000
+```
+
+Terminal 2 — Next.js frontend:
+
+```bash
+cd frontend
+npm install   # first time only
+npm run dev
+```
+
+Open: `http://localhost:3000`
+
+### Run legacy Streamlit UI
 
 ```bash
 streamlit run streamlit_app.py
+```
+
+### Run with demo fallbacks (replay mode)
+
+```bash
+DEMO_MODE=true uvicorn backend.api:app --reload --port 8000
+```
+
+Or for Streamlit:
+
+```bash
+DEMO_MODE=true streamlit run streamlit_app.py
 ```
 
 ### Run tests
@@ -260,52 +324,18 @@ streamlit run streamlit_app.py
 python -m pytest
 ```
 
-### Run a specific validation test
-
-```bash
-python -m pytest tests/test_validation.py
-```
-
-### Lint
+### Lint / Format / Typecheck
 
 ```bash
 ruff check .
-```
-
-### Format
-
-```bash
 ruff format .
-```
-
-### Typecheck
-
-```bash
 mypy backend integrations
 ```
 
-If `mypy` is not configured yet, do not block the demo. Add types incrementally.
-
 ### Run demo flow from CLI
-
-Use this if implemented:
 
 ```bash
 python -m backend.orchestrator
-```
-
-### Generate or refresh synthetic data
-
-Use this if implemented:
-
-```bash
-python -m integrations.pioneer_client --generate-data
-```
-
-### Run with demo fallbacks
-
-```bash
-DEMO_MODE=true streamlit run streamlit_app.py
 ```
 
 ---
@@ -314,72 +344,48 @@ DEMO_MODE=true streamlit run streamlit_app.py
 
 ### General rule
 
-Use deterministic code for hard checks. Use model APIs for language, extraction, classification, search, and visual generation.
-
-Never let an LLM override deterministic validation for size, power, budget, delivery, or warranty constraints.
+Use deterministic code for hard constraint checks. Use Gemini for language, extraction, reasoning, and generation. Never let an LLM override a deterministic pass/fail decision.
 
 ### Task routing
 
-| Task                              | Preferred handler                                            | File                                                                   |
-| --------------------------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------- |
-| Requirement extraction            | Procurement Intelligence Agent; optional LLM/Pioneer support | `backend/agents/procurement_intelligence.py`                           |
-| Hard technical validation         | Deterministic Python rules                                   | `backend/agents/procurement_intelligence.py`                           |
-| Supplier matching                 | Local JSON + keyword/BM25-style scoring                      | `backend/agents/supplier_matching.py`                                  |
-| External supplier/spec enrichment | Tavily                                                       | `integrations/tavily_client.py`                                        |
-| Seller message classification     | Pioneer                                                      | `integrations/pioneer_client.py`                                       |
-| Offer field extraction            | Pioneer                                                      | `integrations/pioneer_client.py`                                       |
-| Risk labels                       | Pioneer + escalation rules                                   | `integrations/pioneer_client.py`, `backend/agents/human_escalation.py` |
-| Deal card image                   | fal                                                          | `integrations/fal_client.py`                                           |
-| Final summary                     | Audit/Summary Subagent; optional LLM support                 | `backend/agents/audit_summary.py`                                      |
+| Task | Handler | File |
+|------|---------|------|
+| Requirement extraction | Gemini (`json_mode=True`) + regex fallback | `procurement_intelligence.py` |
+| Hard technical validation | Deterministic Python rules | `procurement_intelligence.py` |
+| Product clustering | Deterministic spec-similarity (normalized distance) | `product_clustering.py` |
+| Candidate ranking | Deterministic scoring (value_score) | `product_clustering.py` |
+| Candidate evaluation + reasoning | Gemini (judging agent) | `judging_agent.py` |
+| Negotiation dialogue | Gemini (negotiation agent + sub-agents) | `negotiation_agent.py`, `negotiation/` |
+| Guardrails enforcement | System-prompt + post-gen deterministic check | `negotiation/guardrails.py` |
+| Seller message classification | Pioneer | `pioneer_client.py` |
+| Offer field extraction | Pioneer | `pioneer_client.py` |
+| Risk labels | Pioneer + escalation rules | `pioneer_client.py`, `human_escalation.py` |
+| External supplier/spec enrichment | Tavily | `tavily_client.py` |
+| Deal card image | fal | `fal_client.py` |
+| Audit narrative | Gemini | `audit_summary.py` |
 
-### Default tiering rule
+### Tiering rule
 
-* Use local deterministic logic first.
-* Use Pioneer for structured inference only when seller messages need classification/extraction.
-* Use Tavily only when:
+1. Deterministic Python first (validation, clustering, scoring).
+2. Gemini for language: extraction, negotiation dialogue, judging reasoning, audit.
+3. Pioneer for post-hoc message labels on generated turns.
+4. Tavily only when internal match is thin or specs are missing.
+5. fal only at the end for the deal card.
+6. Fallback to saved/templated outputs when any live API is unstable.
 
-  * Local supplier matching finds too few candidates.
-  * Product specs are missing.
-  * Price/spec benchmarking is needed for the demo.
-* Use fal only once near the end of the flow to generate the final deal card.
-* Use fallback outputs during the final presentation unless live API calls are confirmed stable.
+### DEMO_MODE semantics (updated)
+
+`DEMO_MODE=false` (default) — live Gemini mode. Real LLM calls happen.
+`DEMO_MODE=true` — replay mode. Saved transcript replayed. No API keys required.
+
+Use `DEMO_MODE=true` as the CTO-facing safety net if APIs are unstable during judging. The UI banner shows "Live LLM mode" vs "Replay mode" off this flag.
 
 ### Retry and timeout behavior
 
-Use short retries and fast failure.
-
-* Pioneer:
-
-  * Timeout target: 10–15 seconds.
-  * Retry once.
-  * Fallback to saved labels in `integrations/fallback_outputs.py`.
-* Tavily:
-
-  * Timeout target: 8–12 seconds.
-  * Retry once.
-  * Fallback to `data/tavily_fallback_results.json`.
-* fal:
-
-  * Timeout target: 20–30 seconds.
-  * Retry once.
-  * Fallback to `assets/fal_deal_card.png`.
-* LLM provider if used:
-
-  * Timeout target: 15–20 seconds.
-  * Retry once.
-  * Fallback to deterministic or templated output.
-
-### Demo mode
-
-Use `DEMO_MODE=true` to force stable saved outputs.
-
-When `DEMO_MODE=true`:
-
-* Do not depend on live Pioneer responses.
-* Do not depend on live Tavily responses.
-* Do not depend on live fal generation.
-* Use saved negotiation logs, labels, Tavily outputs, and deal card.
-* Preserve the same UI flow so the demo still looks live.
+* Gemini: 15–20s timeout. Retry once. Fallback to templated string.
+* Pioneer: 10–15s timeout. Retry once. Fallback to `fallback_outputs.py`.
+* Tavily: 8–12s timeout. Retry once. Fallback to `data/tavily_fallback_results.json`.
+* fal: 20–30s timeout. Retry once. Fallback to `assets/fal_deal_card.png`.
 
 ---
 
@@ -389,17 +395,19 @@ Keep all secrets out of git.
 
 ### Required or optional env vars
 
-Use these names only:
-
 ```text
-DEMO_MODE
+DEMO_MODE             # false = live LLM (default); true = replay mode
+LLM_API_KEY           # Gemini API key
+LLM_PROVIDER          # gemini
 PIONEER_API_KEY
 PIONEER_BASE_URL
 TAVILY_API_KEY
 FAL_KEY
 FAL_API_KEY
-LLM_API_KEY
-LLM_PROVIDER
+SUPABASE_URL
+SUPABASE_ANON_KEY
+GMAIL_ADDRESS         # stretch: email HITL
+GMAIL_APP_PASSWORD    # stretch: email HITL
 ```
 
 ### Rules
@@ -407,55 +415,76 @@ LLM_PROVIDER
 * Never hardcode API keys.
 * Never commit `.env`.
 * Keep `.env.example` updated with variable names and empty placeholder values.
-* Read env vars through a centralized config helper if one exists.
-* Fail gracefully when an optional API key is missing.
-* In demo mode, run without requiring real API keys.
-
-Example `.env.example` format:
-
-```bash
-DEMO_MODE=true
-PIONEER_API_KEY=
-PIONEER_BASE_URL=
-TAVILY_API_KEY=
-FAL_KEY=
-FAL_API_KEY=
-LLM_API_KEY=
-LLM_PROVIDER=
-```
+* Fail gracefully when an optional API key is missing — fall back to saved output.
+* The system must run with no API keys in replay mode (`DEMO_MODE=true`).
 
 ---
 
 ## 8. API Contracts
 
-Keep contracts stable. Phillip’s frontend should be able to build against these shapes before backend is fully complete.
-
-### Main interface
-
-Implement the primary demo entrypoint:
+### Non-streaming (kept for replay mode + Streamlit)
 
 ```python
-run_demo(request: dict) -> dict
+POST /api/run-demo
+Body: BuyerRequest
+Returns: DemoResult
 ```
 
-Location:
+### Streaming (new — primary live mode)
+
+```
+GET /api/run-demo/stream?request_id=REQ-001&...
+Content-Type: text/event-stream
+
+Emits newline-delimited JSON events:
+{ "type": "<event_type>", "stage": "<stage>", "data": {...}, "ts": <ms> }
+```
+
+Frozen event types (in order):
 
 ```text
-backend/orchestrator.py
+requirements       — structured requirements extracted
+cluster            — product cluster with spec similarity group
+match              — supplier match scored
+negotiation_turn   — one LLM-generated turn (buyer or seller)
+validation         — offer validation result
+human_alert        — pauses flow; user must respond
+escalation         — escalation decision
+recommendation     — final recommendation
+audit              — audit narrative
+done               — carries full DemoResult; stream ends
+error              — unrecoverable failure
 ```
 
-### Buyer Request
+### Mid-flow human response
+
+```
+POST /api/human-response
+Body: { "session_id": "...", "action": "approve" | "reject" | "adjust", "note": "..." }
+Returns: { "ok": true }
+```
+
+### Scenario selector
+
+```
+GET /api/scenarios
+Returns: BuyerBlueprint[]
+```
+
+### Buyer Blueprint (replaces buyer scenario)
 
 ```json
 {
   "request_id": "REQ-001",
-  "raw_request": "We need a GPU for an AI workstation under €650 that fits a compact case and arrives this week.",
+  "raw_request": "We need a GPU for an AI workstation under €650...",
   "region": "Germany",
   "priority": "technical_fit"
 }
 ```
 
-### Structured Requirements
+Note: `structured_requirements` is NOT in blueprints — it is extracted live by Gemini.
+
+### Structured Requirements (same shape, now Gemini-extracted)
 
 ```json
 {
@@ -470,7 +499,35 @@ backend/orchestrator.py
 }
 ```
 
-### Matched Supplier
+### Product Cluster (new)
+
+```json
+{
+  "cluster_id": "cluster_1",
+  "products": [
+    { "seller_id": "vendor_b", "product": "RTX 4070 Super Compact", "length_mm": 267, "power_watts": 220, "price_eur": 640, "delivery_days": 5, "warranty_years": 2 }
+  ],
+  "similarity_score": 0.91,
+  "representative_specs": { "avg_price_eur": 645, "avg_delivery_days": 5 }
+}
+```
+
+### Judged Candidate (new)
+
+```json
+{
+  "cluster_id": "cluster_1",
+  "seller_id": "vendor_b",
+  "product": "RTX 4070 Super Compact",
+  "verdict": "good",
+  "reason": "Fully within size, power, and budget constraints. Fastest compatible delivery in the matched set.",
+  "score": 92
+}
+```
+
+Verdict values: `good` · `borderline` · `bad`
+
+### Matched Supplier (unchanged — derived from clusters now)
 
 ```json
 {
@@ -481,95 +538,51 @@ backend/orchestrator.py
 }
 ```
 
-### Seller Offer
+### Conversation Log (same shape, message now Gemini-generated)
 
 ```json
 {
   "seller_id": "vendor_b",
   "seller_name": "Vendor B",
-  "product": "RTX 4070 Super Compact",
-  "length_mm": 267,
-  "power_watts": 220,
-  "price_eur": 650,
-  "delivery_days": 5,
-  "warranty_years": 2,
-  "availability": "in_stock"
+  "speaker": "seller",
+  "message": "We can offer the RTX 4070 Super Compact at €640 including delivery.",
+  "round": 2,
+  "pioneer_labels": ["price_concession", "final_offer"],
+  "risk_level": "low",
+  "extracted_fields": { "price_eur": 640, "delivery_days": 5 }
 }
 ```
 
-### Validation Result
+### Validation Result (unchanged)
 
 ```json
 {
   "seller_id": "vendor_b",
   "status": "passed",
   "failed_constraints": [],
-  "score": 92,
-  "next_action": "recommend"
+  "score": 92
 }
 ```
 
-Use only these validation statuses:
+Statuses: `passed` · `rejected` · `negotiable` · `missing_information`
 
-```text
-passed
-rejected
-negotiable
-missing_information
-```
-
-### Pioneer Inference Result
-
-```json
-{
-  "message": "We can reduce the price to €650 if delivery next week is acceptable.",
-  "labels": ["price_concession", "delivery_condition"],
-  "risk_level": "low",
-  "extracted_fields": {
-    "price_eur": 650,
-    "delivery_days": 7
-  }
-}
-```
-
-Use only these default Pioneer labels:
-
-```text
-technical_info
-price_concession
-delivery_condition
-warranty_risk
-missing_information
-risk_signal
-final_offer
-```
-
-Use only these risk levels:
-
-```text
-low
-medium
-high
-unknown
-```
-
-### Escalation Result
+### Escalation Result (unchanged shape)
 
 ```json
 {
   "escalate": true,
-  "reason": "Best technically valid offer is €30 above budget",
+  "reason": "Best valid offer is €30 above budget",
   "question_for_human": "Do you approve exceeding the budget by €30 for faster delivery?"
 }
 ```
 
-### Final Recommendation
+### Final Recommendation (unchanged)
 
 ```json
 {
   "recommended_seller": "Vendor B",
   "recommended_product": "RTX 4070 Super Compact",
-  "price_eur": 650,
+  "price_eur": 640,
   "delivery_days": 5,
   "technical_status": "passed",
   "risk_level": "low",
@@ -578,14 +591,14 @@ unknown
 }
 ```
 
-### Full demo result
-
-`run_demo(request)` should return:
+### Full DemoResult (stable keys — new additive keys marked)
 
 ```json
 {
   "request": {},
   "structured_requirements": {},
+  "clusters": [],
+  "judged_candidates": [],
   "matched_suppliers": [],
   "conversation_logs": [],
   "pioneer_labels": [],
@@ -595,22 +608,11 @@ unknown
   "audit_summary": "",
   "final_recommendation": {},
   "deal_card_path": "assets/fal_deal_card.png",
-  "demo_mode": true
+  "demo_mode": false
 }
 ```
 
-### Conversation log item
-
-```json
-{
-  "seller_id": "vendor_b",
-  "speaker": "seller",
-  "message": "We can reduce the price to €650 if delivery next week is acceptable.",
-  "round": 2,
-  "pioneer_labels": ["price_concession", "delivery_condition"],
-  "risk_level": "low"
-}
-```
+`clusters[]` and `judged_candidates[]` are additive — existing section components are unaffected.
 
 ---
 
@@ -622,308 +624,164 @@ unknown
 * Prefer clear names over clever abstractions.
 * Use type hints for public functions.
 * Keep functions small and testable.
-* Keep hard validation deterministic and isolated.
+* Keep hard validation deterministic and isolated from LLM calls.
 
 ### Error handling
 
 * Catch external API errors inside integration clients.
-* Return structured fallback objects instead of crashing the app.
-* Log errors in a way visible to developers, not disruptive to judges.
-* Always preserve the Streamlit UI flow even if an API fails.
+* Return structured fallback objects instead of crashing.
+* Log errors visibly to developers; do not disrupt the UI flow.
+* Every Gemini call must have a fallback path.
 
 ### Typing
 
-* Use `TypedDict`, `dataclasses`, or Pydantic models in `backend/schemas.py`.
-* Keep schemas aligned with the API contracts in this file.
+* Use `TypedDict`, `dataclasses`, or Pydantic in `backend/schemas.py`.
+* Keep schemas aligned with Section 8 contracts.
 * Do not silently change keys used by the frontend.
 
-### Prompt and config management
+### Prompts
 
-* Keep prompts centralized if prompts are added.
-* Do not scatter long prompts across random files.
-* Put reusable prompt strings in a dedicated module if needed:
-
-```text
-backend/prompts.py
-```
-
-or:
-
-```text
-integrations/prompts.py
-```
-
-### Adding a new model integration
-
-When adding a new model/API integration:
-
-1. Create a wrapper in `integrations/`.
-2. Read secrets from env vars only.
-3. Add a fallback response.
-4. Add timeout/retry behavior.
-5. Return structured JSON.
-6. Update `.env.example`.
-7. Update this `CLAUDE.md` if the integration becomes part of the demo path.
+* Keep all Gemini prompts centralized in `backend/prompts.py`.
+* Do not scatter prompt strings across agent files.
+* Keep system prompts (guardrails) in `backend/agents/negotiation/guardrails.py`.
 
 ### Deterministic validation rule
 
-Never replace this with pure LLM reasoning:
+Never replace with LLM reasoning:
 
 ```text
-length_mm <= max_length_mm
-power_watts <= max_power_watts
-price_eur <= budget_eur
+length_mm     <= max_length_mm
+power_watts   <= max_power_watts
+price_eur     <= budget_eur
 delivery_days <= max_delivery_days
 warranty_years >= minimum_warranty_years
 ```
-
-LLMs and Pioneer can help interpret messages, but Python rules decide pass/fail.
 
 ---
 
 ## 10. Team Workflow & Branching
 
-There are 3 developers.
+Three developers. New branches for the LLM rewrite:
 
-### Phillip
+### Dev A — LLM core + negotiation agent
 
-* Own frontend and UI/UX.
-* Work on:
-
-```text
-feature/frontend-dashboard
-```
+Branch: `feature/llm-core`
 
 Own:
+* `integrations/gemini_client.py`
+* `backend/agents/procurement_intelligence.py` (rewrite `extract_requirements()`)
+* `backend/agents/negotiation_agent.py` (new)
+* `backend/agents/negotiation/` (price, delivery, warranty, risk, guardrails)
+* `frontend/` — AgentNetwork edges/hover + three-view layout + live/replay banner
 
-* `streamlit_app.py`
-* Frontend display helpers.
-* Dashboard layout.
-* Buyer request input.
-* Supplier cards.
-* Negotiation timeline.
-* Pioneer label display.
-* Validation table.
-* Escalation panel.
-* Approval screen.
-* fal card display.
+Success condition: Gemini generates live negotiation dialogue; reviewer opens backend and sees real API calls.
 
-Success condition:
+### Dev B — Agent architecture + data
 
-```text
-A judge can understand the whole product by looking at the dashboard.
-```
-
-### Developer 2
-
-* Own backend and agent orchestration.
-* Work on:
-
-```text
-feature/orchestrator-agents
-```
+Branch: `feature/agent-arch`
 
 Own:
+* `data/seller_inventory.json` (restructure to nested)
+* `data/buyer_scenarios.json` → blueprints
+* `backend/data_access.py` (update accessors)
+* `backend/agents/product_clustering.py` (new)
+* `backend/agents/judging_agent.py` (new)
+* `integrations/email_hitl.py` (stretch)
+* `assets/fal_deal_card.png` + `security/aikido_notes.md`
 
-* `backend/orchestrator.py`
-* `backend/schemas.py`
-* `backend/agents/procurement_intelligence.py`
-* `backend/agents/supplier_matching.py`
-* `backend/agents/buyer_agent.py`
-* `backend/agents/seller_agent.py`
-* `backend/agents/human_escalation.py`
-* `backend/agents/audit_summary.py`
+Success condition: clusters surface real candidates; judging agent explains every rejection in natural language.
 
-Success condition:
+### Dev C — Streaming transport + orchestrator + HITL
 
-```text
-The system can run from buyer request to final recommendation.
-```
-
-### Developer 3
-
-* Own integrations, synthetic data, and side tracks.
-* Work on:
-
-```text
-feature/integrations-data
-```
+Branch: `feature/realtime-ui`
 
 Own:
+* `backend/api.py` (streaming SSE endpoint + `/api/human-response`)
+* `backend/orchestrator.py` (event emitter)
+* `frontend/src/lib/stream.ts` (new)
+* `frontend/src/components/ActivityFeed.tsx` (upgrade to event-append + inline alert)
 
-* `integrations/pioneer_client.py`
-* `integrations/tavily_client.py`
-* `integrations/fal_client.py`
-* `integrations/fallback_outputs.py`
-* `data/*.json`
-* `assets/fal_deal_card.png`
-* `security/aikido_notes.md`
-
-Success condition:
-
-```text
-All side tracks are visibly integrated and reliable during the demo.
-```
+Success condition: clicking the button opens a live stream; the feed paints each agent turn as it is generated; a human alert pauses the flow inline.
 
 ### Branches
-
-Use:
 
 ```text
 main
 staging-demo
-feature/frontend-dashboard
-feature/orchestrator-agents
-feature/integrations-data
+feature/llm-core
+feature/agent-arch
+feature/realtime-ui
 ```
 
 ### Merge strategy
 
 * Work in feature branches.
-* Merge feature branches into `staging-demo`.
-* Test full demo on `staging-demo`.
-* Merge stable version into `main`.
+* Merge into `staging-demo` after each phase.
+* Test full streamed run on `staging-demo`.
+* Promote stable `staging-demo` → `main` only after a clean full run.
 * Run the final demo from `main`.
-* Avoid large refactors after the first working integration.
 
-### Integration schedule
+### Phase 0 contracts (must be frozen before any feature branch splits)
 
-* First integration target: Hour 5–7.
-* Second integration target: Hour 10–12.
-* Final stable merge: Hour 17–18.
+1. Gemini client signature: `generate(prompt, system, temperature, json_mode) → str`
+2. Nested inventory shape: `merchants[] → inventories[] → products[]`
+3. SSE event envelope + frozen event types (see Section 8)
+4. `DEMO_MODE` default flipped to `false` (live = default; replay = opt-in)
 
 ---
 
-## 11. Hackathon Priorities & Guardrails
+## 11. Priorities & Guardrails
+
+### What changed after reviewer feedback
+
+The reviewer's core objection: everything is pre-written — the system reads files, not intelligence. He will check the backend code. A reviewer who opened 6-7 tabs is engaged; the architecture must hold up to code inspection.
+
+**Must change:**
+* Delete all static conversation/dialogue data.
+* Add real Gemini calls for extraction, negotiation, judging, and audit.
+* Make the agent feed render line by line as LLM tokens arrive.
+* The `_get_scenario_lookup()` hardcode in `procurement_intelligence.py` must go.
+
+**Keep:**
+* One-button trigger pattern (impressed the reviewer).
+* Deterministic validation (Python owns pass/fail).
+* All existing `DemoResult` keys (section components depend on them).
+* Both API routes (streaming is additive).
+* Supabase fallback pattern.
 
 ### Do this
 
-* Build a stable vertical slice.
-* Keep the demo path deterministic.
-* Use saved fallbacks for live presentation.
-* Show all side tracks visibly in the UI.
-* Keep JSON contracts stable.
-* Make every screen explain what the agents are doing.
-* Show rejected offers and reasons.
-* Show the final human approval moment.
-* Add screenshots and fallback assets early.
-* Prefer simple Python logic over complex frameworks.
+* Make LLM calls real and visible.
+* Show the agent feed running live, line by line.
+* Explain every rejection with natural language from the judging agent.
+* Show modular sub-agents with removable components.
+* Add inline human alert — user acts without leaving the page.
+* Use `DEMO_MODE=true` / replay as the CTO safety net.
+* Keep all section components rendering from the same result keys.
 
 ### Do not do this
 
-* Do not build a full procurement platform.
-* Do not build real purchasing or payment.
-* Do not build real seller messaging.
-* Do not depend fully on live APIs during judging.
-* Do not let the orchestrator do all the work.
-* Do not replace deterministic validation with LLM guesses.
-* Do not add FastAPI, LangGraph, or a database unless the core demo is already working.
-* Do not perform major refactors after the first integration.
+* Do not fake LLM calls or keep pre-written dialogue.
+* Do not let an LLM override deterministic validation.
+* Do not break existing `DemoResult` key shapes.
+* Do not add a complexity toggle — show full orchestration to everyone.
 * Do not hardcode secrets.
-* Do not hide failures; degrade gracefully.
+* Do not perform major refactors beyond what the new plan requires.
+* Do not build real purchasing, payments, or real seller messaging.
 
-### Demo-first priorities
+### Demo-first priorities (ordered)
 
-Prioritize in this order:
-
-1. End-to-end Streamlit demo.
-2. Structured requirement extraction.
-3. Supplier matching.
-4. Seller negotiation logs.
-5. Technical validation table.
-6. Final recommendation.
-7. Pioneer labels.
-8. Human escalation.
-9. Audit summary.
-10. Tavily enrichment.
-11. fal deal card.
-12. Aikido security note.
-
-### 18-hour workflow
-
-#### Hour 0–1: Alignment and setup ✓ COMPLETE
-
-* Confirm Pactum name. ✓
-* Confirm GPU procurement scenario. ✓
-* Create repo and branches. ✓ (main exists; feature branches to create)
-* Finalize JSON contracts. ✓ (see Section 8)
-* Add `.env.example`. ✓
-* Add `requirements.txt`. ✓
-* Create full folder structure and file scaffolds. ✓
-* Add synthetic data files (`data/*.json`). ✓
-* Add fallback outputs for Pioneer, Tavily, fal. ✓
-* Add deterministic validation tests. ✓
-
-#### Hour 1–3: Parallel build block 1 ✓ COMPLETE (Developer 2)
-
-* Phillip: build frontend skeleton using mock data.
-* Developer 2: ✓ negotiation loop live (premium-open → buyer counter → seller concession), value scoring, escalation enriched with price/delivery, `seller_name` crash fixed.
-* Developer 3: build synthetic data and integration stubs.
-
-#### Hour 3–5: Parallel build block 2 ✓ COMPLETE (Developer 2)
-
-* Phillip: connect UI to mock outputs and add status labels.
-* Developer 2: ✓ scenario lookup for exact canonical requirements, richer audit narrative, specific supplier reasons, multi-violation round-2 counters, violation-aware seller alternatives, "best we can do" honesty when no alternative exists.
-* Developer 3: add Pioneer/Tavily/fal wrappers and fallback responses.
-
-#### Hour 5–7: First integration merge ✓ COMPLETE
-
-* ✓ `staging-demo` branch created from `main`, `feature/orchestrator-agents` fast-forward merged (no conflicts).
-* ✓ `streamlit_app.py` fully wired to `run_demo()` with all integration fixes:
-  - Scenario selector (REQ-001/002/003 + Custom) — canonical Supabase lookup for known scenarios, regex for custom text.
-  - `st.session_state` result persistence — page never resets on radio click.
-  - Interactive approval: Approve/Reject radio with confirmation message.
-  - Validation table resolves `seller_id` → full `seller_name` from `matched_suppliers`.
-  - Pioneer labels shown only on seller messages (buyer message label clutter removed).
-  - `st.metric` reason moved to `st.caption` (was broken as delta arg).
-* ✓ Minimum flow working end-to-end in browser:
-  `Buyer request → requirements → matched sellers → negotiation timeline → validation → audit → recommendation → human approval`
-
-#### Hour 7–10: Parallel build block 3
-
-* Phillip: polish dashboard and timelines.
-* Developer 2: improve orchestration and final result object.
-* Developer 3: connect Pioneer, Tavily, fal, and Aikido artifacts.
-
-#### Hour 10–12: Second integration merge
-
-* Test full app on `staging-demo`.
-* Merge stable changes to `main` after successful test.
-
-#### Hour 12–14: Side track completion
-
-* Show Pioneer inference.
-* Show Tavily fallback.
-* Show fal card.
-* Show Aikido note/screenshot.
-
-#### Hour 14–16: Polish and reliability
-
-* Add `DEMO_MODE=true`.
-* Add fallback data.
-* Save all screenshots/assets.
-* Clean README and UI copy.
-
-#### Hour 16–17: Pitch preparation
-
-Use this pitch structure:
-
-```text
-Problem → Solution → Demo → Standout Feature → Side Tracks → Closing
-```
-
-Core message:
-
-```text
-Pactum is not a single agent calling tools. It is a modular orchestration layer for multi-agent, human-in-the-loop B2B procurement.
-```
-
-#### Hour 17–18: Final testing and backup
-
-* Ensure `main` runs.
-* Ensure demo mode works.
-* Ensure all fallback assets exist.
-* Rehearse final demo.
+1. Real Gemini call in extraction — proves intelligence at the first step.
+2. Streaming agent feed — proves real-time computation visually.
+3. Judging agent with explanations — the "wow factor" the reviewer asked for.
+4. Live negotiation dialogue (Gemini, not templated).
+5. Inline human alert — pauses flow visibly.
+6. Technical validation table (unchanged, already works).
+7. Final recommendation + audit (Gemini-written narrative).
+8. Pioneer labels on generated turns.
+9. Tavily enrichment (visible in both UIs).
+10. fal deal card + email HITL (stretch).
+11. Aikido screenshot.
 
 ---
 
@@ -931,21 +789,17 @@ Pactum is not a single agent calling tools. It is a modular orchestration layer 
 
 ### Constraints
 
-* Time budget is 18 hours.
-* Real procurement data may not be available.
-* Use synthetic data if needed.
-* External APIs may fail or be slow during live demo.
-* Pioneer, Tavily, and fal should have fallback responses.
-* Do not rely on real seller communication.
-* Do not implement real purchasing or payments.
+* Time budget: hackathon.
+* Gemini latency: 3–8s per call. Budget: ~30–60s for a full streamed run. Acceptable with streaming (user sees it working). Not acceptable as a blocking POST.
+* External APIs may fail or be slow during live demo — always have replay mode ready.
+* Do not rely on real seller communication or real purchasing.
 * Do not overbuild multimodal ingestion.
 
 ### Latency budget
 
-* Keep the main demo flow responsive.
-* Avoid long live generation during the judge-facing path.
-* Use saved fal image if visual generation is slow.
-* Use saved Tavily/Pioneer outputs if APIs are unstable.
+* Streaming hides latency — each token arrives live, so the UI looks active immediately.
+* For the blocking `/api/run-demo` fallback path, target under 30s total.
+* Gemini per call: 3–8s. Target ≤4 Gemini calls per full run (extraction, negotiation x2, judging, audit).
 
 ### TODOs after Version 1
 
@@ -961,84 +815,94 @@ Pactum is not a single agent calling tools. It is a modular orchestration layer 
 * Add role-based access control.
 * Add approval workflows for procurement teams.
 
-### Known unfinished multimodal support
-
-* Product image input is not required for Version 1.
-* PDF input is not required for Version 1.
-* Catalog screenshots are not required for Version 1.
-* Generated visual deal card is the only required visual/multimodal output.
-
 ---
 
 ## 13. Implementation Status
 
-### What is scaffolded and working (Hour 0–1 complete, Hour 1–3 Developer 2 complete)
-
-All files exist and the end-to-end demo flow runs in `DEMO_MODE=true` with no API keys.
+### What is complete (as of this commit)
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| `streamlit_app.py` | Working / Integrated | Scenario selector, session_state persistence, interactive approval, validated seller names |
-| `backend/orchestrator.py` | Working | Applies value scores, passes `best_offer` to escalation |
-| `backend/schemas.py` | Complete | All TypedDicts match Section 8 contracts |
-| `procurement_intelligence.py` | Working | Regex extraction + deterministic validation + `compute_value_score()` |
-| `supplier_matching.py` | Working | BM25-style scoring from `data/seller_registry.json` |
-| `buyer_agent.py` | Working | 2-round negotiation loop; enriches offers with `seller_name` |
-| `seller_agent.py` | Working | Premium-open strategy; concession logic via `request_alternative()` |
-| `human_escalation.py` | Working | Escalation question includes price, delivery, and score |
-| `audit_summary.py` | Working | Narrative summary of all sellers and outcome |
-| `pioneer_client.py` | Stubbed | HTTP wrapper; falls back to regex-based labels |
-| `tavily_client.py` | Stubbed | TavilyClient wrapper; falls back to saved JSON |
-| `fal_client.py` | Stubbed | fal_client wrapper; falls back to `assets/fal_deal_card.png` |
-| `fallback_outputs.py` | Complete | Static fallbacks for all three APIs |
-| `data/*.json` | Complete | 5 sellers, 9 products, 3 scenarios, negotiation examples |
-| `tests/test_validation.py` | Complete | 4 passing tests for deterministic validation |
-| `.env` / `.env.example` | Complete | All 8 env vars; `.env` is git-ignored |
+| `streamlit_app.py` | Working | Scenario selector, session_state, interactive approval. Legacy UI. |
+| `backend/api.py` | Working | FastAPI with CORS, `/api/run-demo`, `/api/scenarios`. Streaming routes TBD. |
+| `backend/orchestrator.py` | Working | Full `run_demo()` flow. Needs upgrade to event emitter. |
+| `backend/schemas.py` | Complete | All TypedDicts match Section 8 contracts. |
+| `backend/data_access.py` | Working | Supabase + local JSON fallback pattern. |
+| `procurement_intelligence.py` | Partial | `validate_offer()` + `compute_value_score()` complete. `extract_requirements()` has hardcoded lookup — must be replaced with Gemini. |
+| `supplier_matching.py` | Working | BM25-style scoring. Will be replaced/supplemented by `product_clustering.py`. |
+| `buyer_agent.py` | Working but retiring | 2-round hardcoded dialogue loop. Replaced by `negotiation_agent.py`. |
+| `seller_agent.py` | Working but retiring | Premium-open + concession logic. Replaced by `negotiation_agent.py`. |
+| `human_escalation.py` | Working | Escalation triggers + question. Needs pause/resume hook for streaming. |
+| `audit_summary.py` | Working | Deterministic narrative. Switch to Gemini. |
+| `pioneer_client.py` | Stubbed | HTTP wrapper; fallback to regex labels. Keep as-is. |
+| `tavily_client.py` | Stubbed | TavilyClient wrapper; fallback to saved JSON. Keep as-is. |
+| `fal_client.py` | Stubbed | fal_client wrapper; fallback to PNG path. Keep as-is. |
+| `fallback_outputs.py` | Complete | Static fallbacks for all three APIs. |
+| Next.js frontend | Working | Fully wired to `/api/run-demo`. All section components render. Needs streaming upgrade. |
+| `data/seller_registry.json` | Complete | 5 vendor profiles. Keep. |
+| `data/seller_inventory.json` | Complete (flat) | Needs restructure to nested shape. |
+| `data/buyer_scenarios.json` | Has hardcoded requirements | Needs rebuild as blueprints. |
+| `tests/test_validation.py` | Complete | 4 passing deterministic validation tests. |
+| `.env` / `.env.example` | Complete | All env vars; `.env` is git-ignored. |
 
-### Key behaviors after Hour 1–3 (Developer 2)
+### What needs to be built (from new_plan.md)
 
-* **Negotiation fires visibly:** sellers open with their most premium compatible card; buyer counters on price; seller concedes to a cheaper alternative. Judges see a real negotiation log.
-* **Defensible recommendation:** passing offers are scored by `compute_value_score()` (penalises high price −15pts, slow delivery −10pts). Cheaper and faster offers win. Flat 100-score tie-break eliminated.
-* **Informative escalation:** human approval question shows score, price, and delivery days (e.g. "scored 84/100 (€430, 4-day delivery)").
-* **No runtime crash:** offers are enriched with `seller_name` before being passed to the orchestrator's `final_recommendation` block.
+| Component | Priority | Owner | Phase |
+|-----------|----------|-------|-------|
+| `integrations/gemini_client.py` | HIGH | Dev A | 1 |
+| `procurement_intelligence.py` extract rewrite | HIGH | Dev A | 1 |
+| `data/seller_inventory.json` nested restructure | HIGH | Dev B | 1 |
+| `backend/agents/product_clustering.py` | HIGH | Dev B | 1 |
+| Streaming SSE endpoint + `stream.ts` | HIGH | Dev C | 1 |
+| `backend/agents/judging_agent.py` | HIGH | Dev B | 2 |
+| `backend/agents/negotiation_agent.py` + sub-agents + guardrails | HIGH | Dev A | 2 |
+| Orchestrator event emitter upgrade | HIGH | Dev C | 2 |
+| Inline human alert (pause/resume) | HIGH | Dev C | 3 |
+| AgentNetwork labeled edges + hover + 3 views | MEDIUM | Dev A | 3 |
+| `integrations/email_hitl.py` (Gmail) | STRETCH | Dev B | 3 |
+| `assets/fal_deal_card.png` placeholder | MEDIUM | Dev B | 4 |
+| Aikido screenshot | MEDIUM | Dev B | 4 |
+| Replay transcript save | MEDIUM | Dev A | 4 |
 
-### What each developer needs to do next
+### Data files to delete before Phase 1
 
-**Phillip (feature/frontend-dashboard)**
-- Polish `streamlit_app.py` — add Pactum branding, better layout, agent status indicators.
-- Do not change `run_demo()` call signature or result keys.
-
-**Developer 2 (feature/orchestrator-agents)** — Hour 1–3 and Hour 3–5 complete
-- ✓ Negotiation loop fires: premium-open → buyer counter → seller concession.
-- ✓ Value scoring: `compute_value_score()` ranks passing offers by price (−15) and delivery (−10).
-- ✓ Escalation question shows score, price, and delivery days.
-- ✓ `seller_name` KeyError crash fixed.
-- ✓ `extract_requirements()` uses lookup table keyed on `request_id` for exact canonical values (REQ-001/002/003); falls back to keyword/regex for unknown requests.
-- ✓ `audit_summary` builds per-vendor narrative from structured offer data (product, price, delivery, warranty, rejection reasons).
-- ✓ Supplier match reasons are specific: product count, min price, fastest delivery.
-- ✓ Round-2 buyer counter covers price, delivery, and warranty violations in one message.
-- ✓ `request_alternative()` searches fully-compliant alternatives first; returns `None` (not current offer) when nothing better exists — seller says "best we can do" honestly.
-- Next (Hour 5–7): merge into `staging-demo` with Phillip and Developer 3.
-
-**Developer 3 (feature/integrations-data)**
-- Add real Pioneer API calls to `pioneer_client.py` when key is available.
-- Add real Tavily calls to `tavily_client.py` when key is available.
-- Add real fal generation to `fal_client.py` when key is available.
-- Save a fallback `assets/fal_deal_card.png` before demo.
-- Run Aikido scan and update `security/aikido_notes.md`.
+```text
+data/synthetic_negotiations.json
+data/edge_cases.json
+data/audit_summaries.json
+data/validation_results.json
+data/escalation_results.json
+data/final_recommendations.json
+data/pioneer_inference_examples.json
+```
 
 ---
 
 ## 14. How to Work in This Repo
 
-Work demo-first. The scaffold already runs — start with `streamlit run streamlit_app.py` and verify the end-to-end flow before adding features. Follow the data flow from `streamlit_app.py` → `backend/orchestrator.py` → agents in `backend/agents/`. Keep the orchestrator as a router, not a worker. Keep deterministic validation separate from Pioneer inference. Use `DEMO_MODE=true` and fallback outputs whenever live APIs risk slowing or breaking the demo. Make small, reviewable changes on the correct feature branch, merge through `staging-demo`, and protect `main` as the stable final presentation branch.
+Work demo-first. Start both servers and verify the end-to-end flow in the browser before adding features. Follow the streaming data flow: Next.js `stream.ts` → FastAPI SSE → `orchestrator.py` event emitter → agents. Keep the orchestrator as a router and event emitter, not a worker. Keep deterministic validation completely separate from Gemini calls. Use `DEMO_MODE=true` and a saved replay transcript for the CTO-facing demo if live APIs are unstable.
+
+Make small, reviewable changes on the correct feature branch. Freeze the four Phase-0 contracts before splitting. Merge feature branches into `staging-demo` after each phase. Promote `staging-demo` → `main` only after a clean streamed full run.
 
 ### Quick start for new developers
 
 ```bash
+# Backend
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-DEMO_MODE=true streamlit run streamlit_app.py
+cp .env.example .env  # then fill in LLM_API_KEY etc.
+uvicorn backend.api:app --reload --port 8000
+
+# Frontend (separate terminal)
+cd frontend
+cp .env.local.example .env.local
+npm install
+npm run dev
+# Open http://localhost:3000
 ```
 
-The app runs fully in demo mode — no API keys required.
+For replay mode (no API keys needed):
+
+```bash
+DEMO_MODE=true uvicorn backend.api:app --reload --port 8000
+```
