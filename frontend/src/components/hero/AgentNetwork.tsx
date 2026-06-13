@@ -15,7 +15,12 @@ import {
   SellerNode,
 } from "./nodes";
 import { MessageEdge } from "./MessageEdge";
-import type { ConversationLog, MatchedSupplier } from "@/lib/types";
+import type {
+  ConversationLog,
+  FinalRecommendation,
+  MatchedSupplier,
+  StructuredRequirements,
+} from "@/lib/types";
 
 interface Props {
   stageIndex: number;
@@ -25,6 +30,8 @@ interface Props {
   canInteract: boolean;
   suppliers: MatchedSupplier[];
   conversationLogs?: ConversationLog[];
+  requirements?: StructuredRequirements | null;
+  recommendation?: FinalRecommendation | null;
 }
 
 const nodeTypes = {
@@ -46,6 +53,8 @@ export function AgentNetwork({
   canInteract,
   suppliers,
   conversationLogs = [],
+  requirements = null,
+  recommendation = null,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<{ sellerId: string; x: number; y: number } | null>(null);
@@ -78,7 +87,7 @@ export function AgentNetwork({
         type: "request",
         position: { x: COL.request, y: ROW_CENTER },
         data: {
-          label: "GPU · €650",
+          label: requestNodeLabel(requirements),
           active: requestActive,
           done: stageIndex > 0,
         },
@@ -152,7 +161,7 @@ export function AgentNetwork({
     ];
 
     return { nodes, edges };
-  }, [stageIndex, activeSeller, canInteract, suppliers]);
+  }, [stageIndex, activeSeller, canInteract, suppliers, requirements]);
 
   const hoverLog = hover ? lastLogForSeller(conversationLogs, hover.sellerId) : null;
 
@@ -207,7 +216,9 @@ export function AgentNetwork({
           Live Agent Network
         </div>
         <div className="text-[13px] font-medium tracking-tight text-text-1">
-          Orchestrator routes · Buyer Agent negotiates with 5 sellers
+          Orchestrator routes · Buyer Agent negotiates with{" "}
+          {suppliers.length || "matched"} seller
+          {suppliers.length === 1 ? "" : "s"}
         </div>
       </div>
 
@@ -215,7 +226,14 @@ export function AgentNetwork({
         <EdgeDetailPopup log={hoverLog} x={hover!.x} y={hover!.y} />
       )}
 
-      <LiveTicker stageIndex={stageIndex} phase={phase} />
+      <LiveTicker
+        stageIndex={stageIndex}
+        phase={phase}
+        suppliers={suppliers}
+        conversationLogs={conversationLogs}
+        recommendation={recommendation}
+        activeSeller={activeSeller}
+      />
     </div>
   );
 }
@@ -322,11 +340,24 @@ const TONE_STYLES: Record<Tone, TickerStyle> = {
 function LiveTicker({
   stageIndex,
   phase,
+  suppliers,
+  conversationLogs,
+  recommendation,
+  activeSeller,
 }: {
   stageIndex: number;
   phase: Props["phase"];
+  suppliers: MatchedSupplier[];
+  conversationLogs: ConversationLog[];
+  recommendation: FinalRecommendation | null;
+  activeSeller: string;
 }) {
-  const msg = tickerMessage(stageIndex, phase);
+  const msg = tickerMessage(stageIndex, phase, {
+    suppliers,
+    conversationLogs,
+    recommendation,
+    activeSeller,
+  });
   const tone: Tone =
     phase === "approved"
       ? "success"
@@ -357,12 +388,33 @@ function LiveTicker({
   );
 }
 
+function requestNodeLabel(requirements?: StructuredRequirements | null): string {
+  if (!requirements || !requirements.product_type) return "New request";
+  const budget = requirements.budget_eur
+    ? ` · €${requirements.budget_eur}`
+    : "";
+  return `${requirements.product_type}${budget}`;
+}
+
 function tickerMessage(
   stageIndex: number,
   phase: Props["phase"],
+  ctx: {
+    suppliers: MatchedSupplier[];
+    conversationLogs: ConversationLog[];
+    recommendation: FinalRecommendation | null;
+    activeSeller: string;
+  },
 ): { title: string; detail?: string } {
-  if (phase === "approved")
-    return { title: "Deal approved", detail: "Vendor B · €640" };
+  if (phase === "approved") {
+    const rec = ctx.recommendation;
+    return {
+      title: "Deal approved",
+      detail: rec?.recommended_seller
+        ? `${rec.recommended_seller} · €${rec.price_eur}`
+        : undefined,
+    };
+  }
   if (phase === "rejected") return { title: "Deal rejected by human" };
   if (phase === "awaiting_approval")
     return { title: "Awaiting human approval", detail: "escalation triggered" };
@@ -371,12 +423,28 @@ function tickerMessage(
   if (stageIndex === 0)
     return { title: "Extracting structured requirements" };
   if (stageIndex === 1)
-    return { title: "Ranking suppliers", detail: "5 candidates" };
-  if (stageIndex === 2)
     return {
-      title: "Buyer Agent negotiating with Vendor B",
-      detail: "Round 2 of 2",
+      title: "Ranking suppliers",
+      detail: ctx.suppliers.length
+        ? `${ctx.suppliers.length} candidate${ctx.suppliers.length === 1 ? "" : "s"}`
+        : undefined,
     };
+  if (stageIndex === 2) {
+    const sellerLogs = ctx.activeSeller
+      ? ctx.conversationLogs.filter((l) => l.seller_id === ctx.activeSeller)
+      : ctx.conversationLogs;
+    const sellerName =
+      sellerLogs.find((l) => l.seller_name)?.seller_name ?? ctx.activeSeller;
+    const round = sellerLogs.length
+      ? Math.max(...sellerLogs.map((l) => l.round))
+      : 1;
+    return {
+      title: sellerName
+        ? `Buyer Agent negotiating with ${sellerName}`
+        : "Buyer Agent negotiating",
+      detail: `Round ${round}`,
+    };
+  }
   if (stageIndex === 3)
     return { title: "Validating offers against constraints" };
   if (stageIndex === 4) return { title: "Checking escalation triggers" };

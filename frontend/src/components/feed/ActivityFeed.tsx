@@ -2,6 +2,7 @@
 
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
+import { Spinner } from "@/components/primitives/Spinner";
 import type { HumanAlertData, HumanResponse } from "@/lib/types";
 
 export type FeedItem = {
@@ -31,9 +32,10 @@ interface Props {
   items: FeedItem[];
   pendingAlert?: HumanAlertData | null;
   onHumanResponse?: (response: HumanResponse) => void;
+  running?: boolean;
 }
 
-export function ActivityFeed({ items, pendingAlert, onHumanResponse }: Props) {
+export function ActivityFeed({ items, pendingAlert, onHumanResponse, running = false }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -54,11 +56,15 @@ export function ActivityFeed({ items, pendingAlert, onHumanResponse }: Props) {
           </div>
         </div>
         <div className="inline-flex items-center gap-1.5 text-[11px] text-text-2">
-          <span
-            className={`h-1.5 w-1.5 rounded-full ${
-              items.length > 0 ? "animate-pulse bg-emerald-500" : "bg-text-3"
-            }`}
-          />
+          {running ? (
+            <Spinner className="h-3 w-3 text-accent" />
+          ) : (
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${
+                items.length > 0 ? "bg-emerald-500" : "bg-text-3"
+              }`}
+            />
+          )}
           {items.length} events
         </div>
       </div>

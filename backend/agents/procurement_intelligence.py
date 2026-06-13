@@ -8,19 +8,23 @@ from backend.schemas import StructuredRequirements, SellerOffer, ValidationResul
 
 _GEMINI_FALLBACK = "[LLM unavailable — using fallback response]"
 
+# Default requirement values used when LLM is unavailable; kept generic but reasonable.
+_DEFAULT_REQUIREMENTS = {
+    "product_type": "GPU",
+    "use_case": "AI workstation",
+    "max_length_mm": 300,
+    "max_power_watts": 250,
+    "budget_eur": 650.0,
+    "max_delivery_days": 7,
+    "warranty_required": True,
+    "minimum_warranty_years": 1,
+}
+
 
 def _extract_with_regex(raw_request: str) -> dict:
     """Regex-based extraction — fallback when Gemini is unavailable or in replay mode."""
-    requirements: dict = {
-        "product_type": "GPU",
-        "use_case": "AI workstation",
-        "max_length_mm": 300,
-        "max_power_watts": 250,
-        "budget_eur": 650.0,
-        "max_delivery_days": 7,
-        "warranty_required": True,
-        "minimum_warranty_years": 1,
-    }
+    # Start with an empty, generic requirements dict — only populate when found.
+    requirements: dict = {}
 
     budget_match = re.search(r"€(\d+)", raw_request)
     if budget_match:
@@ -31,9 +35,11 @@ def _extract_with_regex(raw_request: str) -> dict:
         requirements["max_delivery_days"] = int(delivery_match.group(1))
 
     lower = raw_request.lower()
+    # Delivery window heuristics
     if "this week" in lower or "within a week" in lower:
         requirements["max_delivery_days"] = 7
 
+    # Use-case inference (generic)
     if "computer vision" in lower:
         requirements["use_case"] = "computer vision"
     elif "ml training" in lower or "machine learning" in lower:
@@ -42,6 +48,14 @@ def _extract_with_regex(raw_request: str) -> dict:
         requirements["use_case"] = "3D rendering"
     elif "data processing" in lower or "analytics" in lower:
         requirements["use_case"] = "data processing"
+
+    # Product type heuristics (avoid forcing GPU)
+    if "gpu" in lower or "graphics" in lower or "vram" in lower:
+        requirements["product_type"] = "GPU"
+    elif "cpu" in lower or "processor" in lower:
+        requirements["product_type"] = "CPU"
+    elif "storage" in lower or "tb" in lower or "ssd" in lower or "hdd" in lower:
+        requirements["product_type"] = "storage"
 
     size_match = re.search(r"under\s+(\d+)\s*mm", raw_request, re.IGNORECASE)
     if size_match:
@@ -55,8 +69,12 @@ def _extract_with_regex(raw_request: str) -> dict:
     if warranty_match:
         requirements["minimum_warranty_years"] = int(warranty_match.group(1))
         requirements["warranty_required"] = True
+    elif "warrant" in lower or "guarantee" in lower:
+        requirements.setdefault("warranty_required", True)
 
-    return requirements
+    # Merge with defaults so missing fields fall back to sensible values
+    merged = {**_DEFAULT_REQUIREMENTS, **requirements}
+    return merged
 
 
 def _coerce_requirements(parsed: dict) -> dict | None:

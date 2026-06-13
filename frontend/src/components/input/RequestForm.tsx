@@ -1,8 +1,9 @@
 "use client";
 
 import { CaretDown, PaperPlaneTilt } from "@phosphor-icons/react";
-import { useState } from "react";
-import { BUYER_COMPANY, defaultRequest } from "@/lib/mockData";
+import { useEffect, useState } from "react";
+import { BUYER_COMPANY } from "@/lib/mockData";
+import { Spinner } from "@/components/primitives/Spinner";
 import type { BuyerScenario } from "@/lib/api";
 
 interface Props {
@@ -25,9 +26,9 @@ const PRIORITIES = [
 ];
 
 export function RequestForm({ onStart, disabled, scenarios = [] }: Props) {
-  const [raw, setRaw] = useState(defaultRequest.raw_request);
-  const [region, setRegion] = useState(defaultRequest.region);
-  const [priority, setPriority] = useState(defaultRequest.priority);
+  const [raw, setRaw] = useState("");
+  const [region, setRegion] = useState(REGIONS[0]);
+  const [priority, setPriority] = useState(PRIORITIES[0].id);
   const [scenarioId, setScenarioId] = useState("");
 
   function applyScenario(id: string) {
@@ -38,6 +39,14 @@ export function RequestForm({ onStart, disabled, scenarios = [] }: Props) {
     if (scenario.region) setRegion(scenario.region);
     if (scenario.priority) setPriority(scenario.priority);
   }
+
+  // Pre-fill the form with the first scenario once the catalog loads, so the
+  // textarea isn't empty on first paint.
+  useEffect(() => {
+    if (scenarioId || raw || scenarios.length === 0) return;
+    applyScenario(scenarios[0].request_id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scenarios]);
 
   return (
     <section className="flex h-full flex-col rounded-2xl border border-border bg-surface p-5 shadow-sm">
@@ -108,8 +117,12 @@ export function RequestForm({ onStart, disabled, scenarios = [] }: Props) {
           disabled={disabled}
           className="mt-1 inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-[13px] font-medium text-white shadow-sm transition-all hover:bg-indigo-600 active:translate-y-px disabled:cursor-not-allowed disabled:bg-text-3"
         >
-          <PaperPlaneTilt className="h-4 w-4" weight="fill" />
-          Start Procurement
+          {disabled ? (
+            <Spinner className="h-4 w-4" />
+          ) : (
+            <PaperPlaneTilt className="h-4 w-4" weight="fill" />
+          )}
+          {disabled ? "Running…" : "Start Procurement"}
         </button>
       </form>
     </section>

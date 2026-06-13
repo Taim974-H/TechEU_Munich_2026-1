@@ -17,6 +17,7 @@ import { FinalRecommendationSection } from "@/components/sections/FinalRecommend
 import { AuditSummary } from "@/components/sections/AuditSummary";
 import { SellerInventorySection } from "@/components/sections/SellerInventory";
 import { Reveal } from "@/components/primitives/Reveal";
+import { PendingSection } from "@/components/primitives/Spinner";
 import {
   initialStatus,
   STAGES,
@@ -492,6 +493,8 @@ export default function Page() {
                 canInteract={showSection("negotiation")}
                 suppliers={result?.matched_suppliers ?? []}
                 conversationLogs={result?.conversation_logs ?? []}
+                requirements={result?.structured_requirements ?? null}
+                recommendation={result?.final_recommendation ?? null}
               />
             </div>
 
@@ -500,16 +503,33 @@ export default function Page() {
                 <RequestForm onStart={start} disabled={isRunning} scenarios={scenarios} />
               </div>
               <div className="lg:col-span-7">
-                <ActivityFeed items={feed} pendingAlert={pendingAlert} onHumanResponse={handleHumanResponse} />
+                <ActivityFeed
+                  items={feed}
+                  pendingAlert={pendingAlert}
+                  onHumanResponse={handleHumanResponse}
+                  running={isRunning}
+                />
               </div>
             </div>
 
             {result && (
               <div className="flex flex-col gap-6">
+                {isRunning && status.stageIndex === 0 && !showSection("requirements") && (
+                  <PendingSection
+                    label="Extracting structured requirements"
+                    detail="Gemini is parsing the buyer request into structured fields…"
+                  />
+                )}
                 <Reveal show={showSection("requirements")}>
                   <StructuredRequirementsSection data={result.structured_requirements} />
                 </Reveal>
 
+                {isRunning && status.stageIndex === 1 && result.judged_candidates.length === 0 && (
+                  <PendingSection
+                    label="Clustering & judging candidates"
+                    detail="Grouping seller inventory by spec similarity and scoring fit…"
+                  />
+                )}
                 <Reveal show={result.judged_candidates.length > 0}>
                   <JudgedCandidatesSection candidates={result.judged_candidates} />
                 </Reveal>
@@ -521,6 +541,12 @@ export default function Page() {
                   </div>
                 </Reveal>
 
+                {isRunning && status.stageIndex === 2 && !showSection("negotiation") && (
+                  <PendingSection
+                    label="Negotiation agent generating live dialogue"
+                    detail="Buyer and seller turns are written live by Gemini, dimension by dimension…"
+                  />
+                )}
                 <Reveal show={showSection("negotiation")}>
                   <div ref={negotiationRef} className="scroll-mt-32">
                     <NegotiationThreads
@@ -532,6 +558,12 @@ export default function Page() {
                   </div>
                 </Reveal>
 
+                {isRunning && status.stageIndex === 3 && !showSection("validation") && (
+                  <PendingSection
+                    label="Validating offers against constraints"
+                    detail="Checking each negotiated offer against size, power, budget, delivery, and warranty…"
+                  />
+                )}
                 <Reveal show={showSection("validation")}>
                   <ValidationTable
                     results={result.validation_results}
@@ -539,6 +571,12 @@ export default function Page() {
                   />
                 </Reveal>
 
+                {isRunning && status.stageIndex === 4 && !showSection("escalation") && (
+                  <PendingSection
+                    label="Checking escalation triggers"
+                    detail="Deciding whether this run needs human review…"
+                  />
+                )}
                 <Reveal show={showSection("escalation")}>
                   <EscalationBanner
                     data={result.escalation_result}
@@ -547,6 +585,12 @@ export default function Page() {
                   />
                 </Reveal>
 
+                {isRunning && status.stageIndex === 5 && !showSection("recommendation") && (
+                  <PendingSection
+                    label="Building final recommendation"
+                    detail="Picking the best validated offer…"
+                  />
+                )}
                 <Reveal show={showSection("recommendation")}>
                   <FinalRecommendationSection
                     rec={result.final_recommendation}
@@ -556,6 +600,12 @@ export default function Page() {
                   />
                 </Reveal>
 
+                {isRunning && status.stageIndex === 5 && showSection("recommendation") && !showSection("audit") && (
+                  <PendingSection
+                    label="Writing audit summary"
+                    detail="Gemini is summarizing the negotiation for the record…"
+                  />
+                )}
                 <Reveal show={showSection("audit")}>
                   <AuditSummary summary={result.audit_summary} />
                 </Reveal>
