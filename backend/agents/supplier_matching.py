@@ -51,6 +51,10 @@ def match_suppliers(requirements: dict) -> list:
             "seller_name": seller["seller_name"],
             "match_score": score,
             "reason": _score_reason(compatible, score),
+            "specialization": seller.get("specialization", ""),
+            "region": seller.get("region", ""),
+            "reliability_score": seller.get("reliability_score", 0.0),
+            "negotiation_style": seller.get("negotiation_style", ""),
         })
 
     scored.sort(key=lambda x: x["match_score"], reverse=True)

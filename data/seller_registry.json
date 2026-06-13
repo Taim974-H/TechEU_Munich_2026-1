@@ -1,42 +1,72 @@
 [
   {
     "seller_id": "vendor_a",
-    "seller_name": "Vendor A",
+    "seller_name": "Vendor A (CompuTech Distribution)",
     "specialization": "high-performance GPUs",
     "region": "Germany",
-    "reliability_score": 0.82,
-    "negotiation_style": "firm"
+    "reliability_score": 0.74,
+    "negotiation_style": "aggressive",
+    "profile": {
+      "headquarters": "Berlin, Germany",
+      "founded_year": 2011,
+      "typical_customers": "gaming and enthusiast workstation builders",
+      "notes": "Strong high-end GPU inventory, but products often exceed compact-case size and power limits."
+    }
   },
   {
     "seller_id": "vendor_b",
-    "seller_name": "Vendor B",
+    "seller_name": "Vendor B (Workstation Parts GmbH)",
     "specialization": "workstation components",
     "region": "Germany",
     "reliability_score": 0.88,
-    "negotiation_style": "cooperative"
+    "negotiation_style": "cooperative",
+    "profile": {
+      "headquarters": "Munich, Germany",
+      "founded_year": 2015,
+      "typical_customers": "AI startups and small studios",
+      "notes": "Specializes in compact, low-power GPUs suited for small-form-factor AI workstations."
+    }
   },
   {
     "seller_id": "vendor_c",
-    "seller_name": "Vendor C",
-    "specialization": "fast delivery components",
-    "region": "Germany",
-    "reliability_score": 0.79,
-    "negotiation_style": "flexible"
+    "seller_name": "Vendor C (RapidShip Components)",
+    "specialization": "fast logistics electronics",
+    "region": "Netherlands",
+    "reliability_score": 0.81,
+    "negotiation_style": "flexible",
+    "profile": {
+      "headquarters": "Amsterdam, Netherlands",
+      "founded_year": 2018,
+      "typical_customers": "businesses needing rapid EU delivery",
+      "notes": "Fastest delivery times in the region but usually higher pricing on premium GPUs."
+    }
   },
   {
     "seller_id": "vendor_d",
-    "seller_name": "Vendor D",
-    "specialization": "budget components",
-    "region": "Austria",
-    "reliability_score": 0.71,
-    "negotiation_style": "aggressive"
+    "seller_name": "Vendor D (BudgetGPU Direct)",
+    "specialization": "budget consumer electronics",
+    "region": "Poland",
+    "reliability_score": 0.62,
+    "negotiation_style": "rigid",
+    "profile": {
+      "headquarters": "Warsaw, Poland",
+      "founded_year": 2019,
+      "typical_customers": "price-sensitive home and small office buyers",
+      "notes": "Lowest prices in the market, but slow shipping and short (often 6-month) warranties."
+    }
   },
   {
     "seller_id": "vendor_e",
-    "seller_name": "Vendor E",
-    "specialization": "enterprise hardware",
+    "seller_name": "Vendor E (Enterprise Compute Solutions)",
+    "specialization": "enterprise AI hardware",
     "region": "Switzerland",
-    "reliability_score": 0.91,
-    "negotiation_style": "formal"
+    "reliability_score": 0.93,
+    "negotiation_style": "formal",
+    "profile": {
+      "headquarters": "Zurich, Switzerland",
+      "founded_year": 2009,
+      "typical_customers": "enterprise data centers and research labs",
+      "notes": "Premium pricing, long 3-year warranties, but slower delivery and minimum order processes."
+    }
   }
 ]

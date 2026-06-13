@@ -5,11 +5,13 @@ def check_escalation(validation_results: list, requirements: dict, best_offer: d
     if all_failed:
         return {
             "escalate": True,
+            "trigger": "no_compatible_offer",
             "reason": "No supplier offer passed all technical and commercial constraints.",
             "question_for_human": "No compatible offer was found. Do you want to relax your constraints or explore other suppliers?",
         }
 
     best = max(passed, key=lambda v: v["score"])
+    close_offers = [v for v in passed if v is not best and best["score"] - v["score"] <= 5]
 
     if best_offer:
         question = (
@@ -22,6 +24,7 @@ def check_escalation(validation_results: list, requirements: dict, best_offer: d
 
     return {
         "escalate": True,
+        "trigger": "competing_offers" if close_offers else "approval_required",
         "reason": "Final approval required before completing procurement.",
         "question_for_human": question,
     }

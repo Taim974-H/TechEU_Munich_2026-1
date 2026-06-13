@@ -6,96 +6,21 @@ A human buyer enters a messy procurement request. Pactum extracts structured req
 
 ---
 
-## Quick start
-
-```bash
-# 1. Clone and enter the repo
-git clone https://github.com/PRONGS-CHIRAG/TechEU_Munich_2026.git
-cd TechEU_Munich_2026
-
-# 2. Create and activate a virtual environment
-python -m venv .venv
-source .venv/bin/activate        # macOS / Linux
-# .venv\Scripts\activate         # Windows
-
-# 3. Install dependencies
-pip install -r requirements.txt
-
-# 4. Copy the env template and fill in your keys
-cp .env.example .env
-
-# 5. Run in demo mode (no API keys required)
-DEMO_MODE=true streamlit run streamlit_app.py
-```
-
-The app opens at **http://localhost:8501**.
-
----
-
-## Running modes
-
-### Demo mode (recommended for judging)
-
-Uses saved fallback outputs for Pioneer, Tavily, and fal. Supabase data is still live.
-
-```bash
-DEMO_MODE=true streamlit run streamlit_app.py
-```
-
-### Live mode (requires API keys in `.env`)
-
-```bash
-streamlit run streamlit_app.py
-```
-
-### Different port
-
-```bash
-streamlit run streamlit_app.py --server.port 8502
-```
-
----
-
-## Environment variables
-
-Copy `.env.example` to `.env` and fill in values:
-
-```bash
-DEMO_MODE=true
-
-SUPABASE_URL=
-SUPABASE_ANON_KEY=
-
-PIONEER_API_KEY=
-PIONEER_BASE_URL=
-
-TAVILY_API_KEY=
-
-FAL_KEY=
-FAL_API_KEY=
-
-LLM_API_KEY=
-LLM_PROVIDER=
-```
-
-`DEMO_MODE=true` is the only required variable to run the app without any external services.
-
----
-
 ## Project structure
 
 ```
 pactum/
-├── streamlit_app.py          — Streamlit frontend dashboard
+├── streamlit_app.py          — Streamlit dashboard (alternate/legacy UI)
 ├── backend/
+│   ├── api.py                 — FastAPI bridge for the Next.js frontend
 │   ├── orchestrator.py       — run_demo() end-to-end flow
 │   ├── schemas.py            — TypedDicts for all data shapes
-│   ├── data_access.py        — Supabase client with local JSON fallback
+│   ├── data_access.py         — Supabase client with local JSON fallback
 │   └── agents/
 │       ├── procurement_intelligence.py  — requirement extraction + validation
 │       ├── supplier_matching.py         — BM25-style vendor scoring
-│       ├── buyer_agent.py               — 2-round negotiation loop
-│       ├── seller_agent.py              — premium-open + concession logic
+│       ├── buyer_agent.py               — negotiation loop
+│       ├── seller_agent.py              — concession logic
 │       ├── human_escalation.py          — escalation triggers
 │       └── audit_summary.py             — final narrative summary
 ├── integrations/
@@ -103,20 +28,146 @@ pactum/
 │   ├── tavily_client.py      — external supplier/spec enrichment
 │   ├── fal_client.py         — visual deal card generation
 │   └── fallback_outputs.py   — static fallbacks for all three APIs
-├── data/                     — local JSON fallback data
-├── assets/                   — deal card image and screenshots
+├── data/                      — seed data + Supabase setup (see below)
+│   ├── *.json                 — seed/fallback data for all Supabase tables
+│   ├── scripts/
+│   │   ├── apply_schema.py    — applies data/supabase/schema.sql to Postgres
+│   │   └── seed_supabase.py   — upserts data/*.json into Supabase tables
+│   └── supabase/
+│       └── schema.sql         — Supabase table definitions
+├── frontend/                  — Next.js UI (the app's frontend) + FastAPI client (src/lib/api.ts)
+├── assets/                    — deal card image and screenshots
+├── security/                  — Aikido security scan notes
 └── tests/
     └── test_validation.py    — deterministic constraint tests
 ```
 
 ---
 
-## Useful commands
+## 1. Setup
+
+### Backend (Python)
 
 ```bash
-# Smoke test the backend without the UI
-DEMO_MODE=true python -m backend.orchestrator
+# Create and activate a virtual environment
+python -m venv .venv
+source .venv/bin/activate        # macOS / Linux
+# .venv\Scripts\activate          # Windows
 
+# Install dependencies
+pip install -r requirements.txt
+
+# Copy the env template and fill in your keys
+cp .env.example .env
+```
+
+### Frontend (Next.js prototype)
+
+```bash
+cd frontend
+npm install
+```
+
+---
+
+## 2. Environment variables
+
+Copy `.env.example` to `.env` and fill in values:
+
+```bash
+DEMO_MODE=true
+
+# Supabase
+SUPABASE_URL=
+SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+
+# Direct Postgres connection (used by data/scripts/apply_schema.py)
+SUPABASE_DB_HOST=
+SUPABASE_DB_PORT=
+SUPABASE_DB_NAME=
+SUPABASE_DB_USER=
+SUPABASE_DB_PASSWORD=
+
+# Side track integrations
+PIONEER_API_KEY=
+PIONEER_BASE_URL=
+TAVILY_API_KEY=
+FAL_KEY=
+FAL_API_KEY=
+LLM_API_KEY=
+LLM_PROVIDER=
+```
+
+`DEMO_MODE=true` is the only required variable to run the app without any external services. `backend/data_access.py` reads from Supabase when `SUPABASE_URL`/`SUPABASE_ANON_KEY` are set, and falls back to the local JSON files in `data/` otherwise (or if the Supabase call fails).
+
+---
+
+## 3. Data & Supabase
+
+The JSON files in `data/` are the seed/fallback data for every Supabase table used by the app. The actual runtime data now lives in Supabase — `data/*.json` exist so the demo still works offline (`DEMO_MODE=true`) and so the Supabase project can be rebuilt from scratch.
+
+To (re)create and seed the Supabase project:
+
+```bash
+# 1. Apply the schema (requires SUPABASE_DB_* vars in .env)
+python -m data.scripts.apply_schema
+
+# 2. Seed all tables from data/*.json (requires SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY)
+python -m data.scripts.seed_supabase
+```
+
+---
+
+## 4. Running the app
+
+### Main app — Next.js + FastAPI (the integrated app)
+
+The Next.js frontend is the app's UI. It talks to a FastAPI bridge over HTTP, which calls `run_demo()` in `backend/orchestrator.py`. **Both processes must be running.**
+
+**Terminal 1 — FastAPI backend** (http://localhost:8000):
+
+```bash
+DEMO_MODE=true uvicorn backend.api:app --reload --port 8000
+```
+
+**Terminal 2 — Next.js frontend** (http://localhost:3000):
+
+```bash
+cd frontend
+npm run dev
+```
+
+Open **http://localhost:3000**, submit a procurement request, and the frontend calls `POST /api/run-demo` on the FastAPI backend for real `run_demo()` output. CORS is pre-configured for `http://localhost:3000`. To point the frontend at a different backend URL, set `NEXT_PUBLIC_API_URL` (e.g. in `frontend/.env.local`).
+
+### Alternate UI — Streamlit
+
+A secondary, self-contained dashboard that calls `run_demo()` directly (no FastAPI needed).
+
+```bash
+# Demo mode (no external API keys required, Supabase data still live if configured)
+DEMO_MODE=true streamlit run streamlit_app.py
+
+# Live mode (requires API keys in .env)
+streamlit run streamlit_app.py
+
+# Different port
+streamlit run streamlit_app.py --server.port 8502
+```
+
+The app opens at **http://localhost:8501**.
+
+### Backend only (no UI)
+
+```bash
+DEMO_MODE=true python -m backend.orchestrator
+```
+
+---
+
+## 5. Useful commands
+
+```bash
 # Run tests
 python -m pytest tests/ -q
 
@@ -125,11 +176,14 @@ ruff check .
 
 # Format
 ruff format .
+
+# Typecheck
+mypy backend integrations
 ```
 
 ---
 
-## Demo flow
+## 6. Demo flow
 
 1. Select a scenario (REQ-001 / REQ-002 / REQ-003) or enter a custom request
 2. Click **Start Procurement**
@@ -140,14 +194,14 @@ ruff format .
 
 ---
 
-## Branches
+## 7. Branches
 
 | Branch | Purpose |
 |--------|---------|
 | `main` | Stable — run the final demo from here |
 | `staging-demo` | Integration testing — merge feature branches here first |
+| `staging-ui-philipp` | Source of the `frontend/` Next.js prototype |
 | `feature/orchestrator-agents` | Backend agents and orchestration |
-| `staging-ui-philipp` | Frontend / UI |
 | `feature/integrations-data` | Pioneer, Tavily, fal, synthetic data |
 
 Always demo from `main`. Merge through `staging-demo` first.

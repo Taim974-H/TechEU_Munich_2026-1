@@ -50,6 +50,13 @@ def run_demo(request: dict) -> dict:
     for offer, result in zip(raw_offers, validation_results):
         if result["status"] == "passed":
             result["score"] = compute_value_score(structured_requirements, offer)
+        result["seller_name"] = offer.get("seller_name", offer.get("seller_id", ""))
+        result["product"] = offer.get("product", "")
+        result["length_mm"] = offer.get("length_mm", 0)
+        result["power_watts"] = offer.get("power_watts", 0)
+        result["price_eur"] = offer.get("price_eur", 0)
+        result["delivery_days"] = offer.get("delivery_days", 0)
+        result["warranty_years"] = offer.get("warranty_years", 0)
 
     passed = [v for v in validation_results if v["status"] == "passed"]
     best = max(passed, key=lambda v: v["score"]) if passed else None
@@ -67,6 +74,7 @@ def run_demo(request: dict) -> dict:
             "recommended_product": best_offer["product"],
             "price_eur": best_offer["price_eur"],
             "delivery_days": best_offer["delivery_days"],
+            "warranty_years": best_offer.get("warranty_years", 0),
             "technical_status": "passed",
             "risk_level": "low",
             "reason": "Best balance of compatibility, price, delivery, and warranty.",
@@ -78,6 +86,7 @@ def run_demo(request: dict) -> dict:
             "recommended_product": "",
             "price_eur": 0,
             "delivery_days": 0,
+            "warranty_years": 0,
             "technical_status": "rejected",
             "risk_level": "high",
             "reason": "No offer passed all technical constraints.",
