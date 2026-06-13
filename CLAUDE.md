@@ -8,7 +8,7 @@ Use this file as the persistent working context for Claude Code in the **Pactum*
 
 * Build **Pactum**, a multi-agent B2B procurement negotiation layer.
 * Coordinate buyer agents, seller agents, specialist agents, and humans to negotiate and validate technical purchases.
-* Focus Version 1 on a **GPU procurement demo for an AI workstation**.
+* Focus Version 1 on a **generalized B2B procurement demo** — originally GPU-only, now supporting any product type (GPUs, ergonomic chairs, industrial sensors, etc.).
 * Treat this as a hackathon-grade vertical slice, not a full procurement platform.
 
 ### Who it is for
@@ -40,7 +40,7 @@ Optimize for visible intelligence, real-time computation, and a working end-to-e
 
 ## 2. Architecture
 
-### Current architecture (what is live as of Phase 1)
+### Current architecture (what is live as of Phase 2)
 
 ```text
 Human Buyer
@@ -144,10 +144,10 @@ Buyer request
 
 ### Data
 
-* Keep product and inventory data in `data/` as JSON (with Supabase sync).
+* Keep product and inventory data in `data/` as JSON (Supabase bypassed for registry/inventory — always reads local JSON directly).
 * **Delete all pre-written conversation/dialogue data** (see Section 11).
-* Seller inventory restructured to nested: `merchants[] → inventories[] → products[]`.
-* Buyer blueprints replace old buyer_scenarios (strip `structured_requirements` — extracted live now).
+* Seller inventory restructured to nested: `merchants[] → inventories[] → products[]`. Currently 34 products across 7 vendors.
+* Buyer blueprints replace old buyer_scenarios (strip `structured_requirements` — extracted live now). Includes REQ-001–005.
 
 ### ML / model layer
 
@@ -196,22 +196,22 @@ pactum/
 │   ├── data_access.py        ✓ Supabase + local JSON fallback
 │   └── agents/
 │       ├── __init__.py       ✓
-│       ├── procurement_intelligence.py  ✓ validate_offer() + compute_value_score() (unchanged)
+│       ├── procurement_intelligence.py  ✅ evaluate_constraints() added (Phase 2); validate_offer() + compute_value_score() unchanged
 │       │                                   extract_requirements() → Gemini live ✅ Phase 1
-│       ├── product_clustering.py        ✅ cluster_products() — greedy euclidean clustering (Phase 1)
+│       ├── product_clustering.py        ✅ cluster_products() — data-driven feature config, greedy euclidean (Phase 2)
 │       ├── supplier_matching.py         ✓ BM25-style scoring (keep or fold into clustering)
-│       ├── judging_agent.py             NEW judge_candidates() — Gemini per-candidate reasoning
-│       ├── negotiation_agent.py         NEW replaces buyer_agent + seller_agent
+│       ├── judging_agent.py             ✅ judge_candidates() — Gemini per-candidate reasoning (Phase 2)
+│       ├── negotiation_agent.py         ✅ live Gemini dialogue; gated on good/borderline judgements (Phase 2)
 │       ├── negotiation/
-│       │   ├── price.py                 NEW price sub-agent
-│       │   ├── delivery.py              NEW delivery sub-agent
-│       │   ├── warranty.py              NEW warranty sub-agent
-│       │   ├── risk.py                  NEW risk sub-agent
-│       │   └── guardrails.py            NEW god-rails: system-prompt constraints + post-gen check
-│       ├── buyer_agent.py               RETIRING → replaced by negotiation_agent.py
-│       ├── seller_agent.py              RETIRING → replaced by negotiation_agent.py
-│       ├── human_escalation.py          ✓ escalation triggers (keep); add pause/resume hook
-│       └── audit_summary.py             ✓ keep; switch narrative to Gemini
+│       │   ├── price.py                 ✅ price sub-agent (Phase 2)
+│       │   ├── delivery.py              ✅ delivery sub-agent (Phase 2)
+│       │   ├── warranty.py              ✅ warranty sub-agent (Phase 2)
+│       │   ├── risk.py                  ✅ risk sub-agent (Phase 2)
+│       │   └── guardrails.py            ✅ god-rails: system-prompt constraints + post-gen check (Phase 2)
+│       ├── buyer_agent.py               RETIRED — replaced by negotiation_agent.py
+│       ├── seller_agent.py              RETIRED — replaced by negotiation_agent.py
+│       ├── human_escalation.py          ✓ escalation triggers (keep); add pause/resume hook (Phase 3)
+│       └── audit_summary.py             ✅ Gemini-written narrative (Phase 2)
 │
 ├── integrations/
 │   ├── __init__.py           ✓
@@ -238,9 +238,9 @@ pactum/
 │   └── .env.local.example    NEW NEXT_PUBLIC_API_URL=http://localhost:8000
 │
 ├── data/
-│   ├── seller_registry.json        ✓ 5 vendor profiles (keep)
-│   ├── seller_inventory.json       ✅ nested merchants→inventories→products (Phase 1)
-│   ├── buyer_scenarios.json        → rebuild as blueprints (strip structured_requirements)
+│   ├── seller_registry.json        ✅ 7 vendor profiles (vendor_f: chairs, vendor_g: sensors added)
+│   ├── seller_inventory.json       ✅ nested merchants→inventories→products; 34 products, 7 vendors (Phase 2)
+│   ├── buyer_scenarios.json        ✅ blueprints only; REQ-001–005 (chair + sensor added in Phase 2)
 │   ├── tavily_fallback_results.json ✓ keep
 │   ├── synthetic_negotiations.json  DELETE (pre-written dialogue)
 │   ├── edge_cases.json              DELETE (canned outputs)
@@ -259,7 +259,7 @@ pactum/
 │
 └── tests/
     ├── __init__.py           ✓
-    └── test_validation.py    ✓ 4 tests for deterministic validation
+    └── test_validation.py    ✅ 10 tests for deterministic validation + generalized constraint evaluation (Phase 2)
 ```
 
 ---
@@ -483,7 +483,7 @@ Returns: BuyerBlueprint[]
 
 Note: `structured_requirements` is NOT in blueprints — it is extracted live by Gemini.
 
-### Structured Requirements (same shape, now Gemini-extracted)
+### Structured Requirements (Gemini-extracted; generalized as of Phase 2)
 
 ```json
 {
@@ -494,9 +494,12 @@ Note: `structured_requirements` is NOT in blueprints — it is extracted live by
   "budget_eur": 650,
   "max_delivery_days": 7,
   "warranty_required": true,
-  "minimum_warranty_years": 1
+  "minimum_warranty_years": 1,
+  "extra_constraints": []
 }
 ```
+
+Note: `max_length_mm` and `max_power_watts` are **presence-gated** — only populated when the buyer explicitly states a physical constraint. If absent, products are not failed on those fields. `extra_constraints` carries any additional product-specific constraints (e.g. material, ergonomic rating) as `ExtraConstraint` objects.
 
 ### Product Cluster (new)
 
@@ -738,6 +741,23 @@ feature/realtime-ui
 7. ✅ `frontend/src/app/page.tsx` — real streaming; no more fake setTimeout reveals
 8. ✅ `backend/prompts.py` — central Gemini prompt store
 
+### Phase 2 deliverables (COMPLETE — committed on feature/chirag)
+
+1. ✅ `backend/agents/judging_agent.py` — `judge_candidates()` with Gemini per-candidate reasoning
+2. ✅ `backend/agents/negotiation_agent.py` — live Gemini dialogue; gated on good/borderline judgements
+3. ✅ `backend/agents/negotiation/{price,delivery,warranty,risk,guardrails}.py` — modular sub-agents
+4. ✅ `audit_summary.py` — switched to Gemini-written narrative
+5. ✅ `ExtraConstraint` schema + `evaluate_constraints()` in `backend/schemas.py` and `procurement_intelligence.py` — shared constraint evaluator replacing duplicated inline checks
+6. ✅ `StructuredRequirements` `max_length_mm`/`max_power_watts` are presence-gated — only set when buyer explicitly states them; missing = FAIL
+7. ✅ Gemini prompts generalized across extraction, negotiation, judging, guardrails (`backend/prompts.py`)
+8. ✅ `product_clustering.py` — data-driven feature config computed from actual inventory
+9. ✅ `data_access.py` — always reads registry/inventory from local JSON, bypassing Supabase
+10. ✅ `data/seller_inventory.json` — added vendor_f (5 ergonomic chairs) + vendor_g (5 industrial sensors); 34 products total
+11. ✅ `data/seller_registry.json` — added vendor_f + vendor_g profiles; 7 vendors total
+12. ✅ `data/buyer_scenarios.json` — added REQ-004 (chair) + REQ-005 (sensor); 5 scenarios total
+13. ✅ Frontend: `ValidationTable` + `StructuredRequirements` — conditionally render length/power columns; generic extra_constraints chips
+14. ✅ `tests/test_validation.py` — 10 tests passing (up from 4); covers generalized constraint evaluation
+
 ---
 
 ## 11. Priorities & Guardrails
@@ -753,9 +773,10 @@ The reviewer's core objection: everything is pre-written — the system reads fi
 * ✅ `extract_requirements()` now calls Gemini live with `json_mode=True` + type coercion + regex fallback.
 * ✅ Agent feed renders line by line via SSE — real streaming, not setTimeout fakes.
 * ✅ Product clustering live across all 24 inventory products (6 clusters).
-* Remaining: Gemini negotiation dialogue — `negotiation_agent.py` + sub-agents (Phase 2).
-* Remaining: Judging agent with per-candidate explanations (Phase 2).
-* Remaining: `audit_summary.py` switched to Gemini narrative (Phase 2).
+* ✅ Gemini negotiation dialogue — `negotiation_agent.py` + sub-agents (Phase 2 complete).
+* ✅ Judging agent with per-candidate explanations (Phase 2 complete).
+* ✅ `audit_summary.py` switched to Gemini narrative (Phase 2 complete).
+* ✅ Pactum generalized from GPU-only to any B2B product type — `ExtraConstraint`, `evaluate_constraints()`, data-driven clustering, 7 vendors, 5 buyer scenarios (Phase 2 complete).
 * Remaining: Inline human alert pause/resume wired to `POST /api/human-response` (Phase 3).
 
 **Keep:**
@@ -835,7 +856,7 @@ The reviewer's core objection: everything is pre-written — the system reads fi
 
 ## 13. Implementation Status
 
-### What is complete (as of Phase 1)
+### What is complete (as of Phase 2)
 
 | Component | Status | Notes |
 |-----------|--------|-------|
@@ -855,28 +876,35 @@ The reviewer's core objection: everything is pre-written — the system reads fi
 | `frontend/src/lib/types.ts` | ✅ Updated (Phase 1) | `ProductCluster`, `JudgedCandidate` interfaces. `DemoResult` extended with `clusters?`, `judged_candidates?`, `session_id?`. |
 | `frontend/src/components/feed/ActivityFeed.tsx` | ✅ Updated (Phase 1) | `gemini`, `clustering`, `judging` agent types added. |
 | `frontend/src/app/page.tsx` | ✅ Updated (Phase 1) | `start()` uses `startStream()`; events drive feed and section reveals. No more fake setTimeout streaming. |
+| `backend/agents/judging_agent.py` | ✅ Complete (Phase 2) | `judge_candidates()` — Gemini per-candidate reasoning; verdict: good/borderline/bad + natural language reason. |
+| `backend/agents/negotiation_agent.py` | ✅ Complete (Phase 2) | Live Gemini dialogue per turn; gated on good/borderline cluster judgements to bound Gemini calls. |
+| `backend/agents/negotiation/` sub-agents | ✅ Complete (Phase 2) | price, delivery, warranty, risk, guardrails — all live. |
+| `backend/schemas.py` (`ExtraConstraint`) | ✅ Updated (Phase 2) | `ExtraConstraint` TypedDict + `evaluate_constraints()` as shared constraint evaluator; `max_length_mm`/`max_power_watts` now presence-gated. |
+| `backend/prompts.py` | ✅ Updated (Phase 2) | All prompts generalized for any B2B product type (not GPU-specific). |
+| `data/seller_registry.json` | ✅ Updated (Phase 2) | 7 vendor profiles: original 5 + vendor_f (ergonomic chairs) + vendor_g (industrial sensors). |
+| `data/seller_inventory.json` | ✅ Updated (Phase 2) | 34 products across 7 vendors (added 5 chairs + 5 sensors). |
+| `data/buyer_scenarios.json` | ✅ Updated (Phase 2) | 5 scenarios: REQ-001–003 (GPU variants) + REQ-004 (chair) + REQ-005 (sensor). |
+| `frontend/.../ValidationTable.tsx` | ✅ Updated (Phase 2) | Conditionally renders length/power columns; generic extra_constraints chips. |
+| `frontend/.../StructuredRequirements.tsx` | ✅ Updated (Phase 2) | Conditionally renders length/power; shows extra_constraints. |
 | `streamlit_app.py` | Working | Scenario selector, session_state, interactive approval. Legacy UI. |
-| `backend/data_access.py` | Working | Supabase + local JSON fallback pattern. |
+| `backend/data_access.py` | ✅ Updated (Phase 2) | Always reads registry/inventory from local JSON (bypasses Supabase); Supabase pattern kept for other data. |
 | `supplier_matching.py` | Working | BM25-style scoring. Supplemented by `product_clustering.py`. |
-| `buyer_agent.py` | Retiring (Phase 2) | 2-round hardcoded dialogue loop → replaced by `negotiation_agent.py`. |
-| `seller_agent.py` | Retiring (Phase 2) | Premium-open + concession logic → replaced by `negotiation_agent.py`. |
+| `buyer_agent.py` | RETIRED | Replaced by `negotiation_agent.py`. |
+| `seller_agent.py` | RETIRED | Replaced by `negotiation_agent.py`. |
 | `human_escalation.py` | Working | Escalation triggers + question. Needs pause/resume hook wired to `POST /api/human-response` (Phase 3). |
-| `audit_summary.py` | Working | Deterministic narrative. Switch to Gemini (Phase 2). |
+| `audit_summary.py` | ✅ Complete (Phase 2) | Gemini-written narrative. |
 | `pioneer_client.py` | Stubbed | HTTP wrapper; fallback to regex labels. Keep as-is. |
 | `tavily_client.py` | Stubbed | TavilyClient wrapper; fallback to saved JSON. Keep as-is. |
 | `fal_client.py` | Stubbed | fal_client wrapper; fallback to PNG path. Keep as-is. |
 | `fallback_outputs.py` | Complete | Static fallbacks for all three APIs. |
 | `data/seller_registry.json` | Complete | 5 vendor profiles. Keep. |
-| `tests/test_validation.py` | Complete | 4 passing deterministic validation tests. |
+| `tests/test_validation.py` | ✅ Complete (Phase 2) | 10 passing tests — deterministic validation + generalized constraint evaluation. |
 | `.env` / `.env.example` | Complete | All env vars; `.env` is git-ignored. `DEMO_MODE=false`, `LLM_PROVIDER=gemini`. |
 
-### What needs to be built (Phase 2 onward)
+### What needs to be built (Phase 3 onward)
 
 | Component | Priority | Phase |
 |-----------|----------|-------|
-| `backend/agents/judging_agent.py` | HIGH | 2 |
-| `backend/agents/negotiation_agent.py` + `negotiation/{price,delivery,warranty,risk,guardrails}.py` | HIGH | 2 |
-| `audit_summary.py` switch to Gemini narrative | HIGH | 2 |
 | Inline human alert pause/resume (`POST /api/human-response` + `ActivityFeed.tsx` inline UI) | HIGH | 3 |
 | AgentNetwork labeled edges + hover popup per event + 3-view layout | MEDIUM | 3 |
 | `integrations/email_hitl.py` (Gmail, stretch) | STRETCH | 3 |
