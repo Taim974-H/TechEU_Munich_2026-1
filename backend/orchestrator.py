@@ -150,7 +150,12 @@ def run_demo_stream(request: dict) -> Generator[dict, None, None]:
             transcript = _load_transcript(request.get("request_id", ""))
             if transcript is not None:
                 for raw_event in transcript:
-                    yield event(raw_event["type"], raw_event["stage"], raw_event["data"])
+                    data = raw_event["data"]
+                    if raw_event["type"] == "done":
+                        # The transcript was recorded live (demo_mode=False);
+                        # mark it as a replay so the UI shows "Replay" here.
+                        data = {**data, "demo_mode": True}
+                    yield event(raw_event["type"], raw_event["stage"], data)
                 return
 
         structured_requirements = extract_requirements(request)
