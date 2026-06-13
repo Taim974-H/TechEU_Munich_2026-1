@@ -187,9 +187,10 @@ def run_demo_stream(request: dict) -> Generator[dict, None, None]:
             proceeding_candidates.append({**judged, "product_data": products[0]})
 
         conversation_logs, raw_offers = run_negotiation(structured_requirements, proceeding_candidates, seller_registry)
-        for log in conversation_logs:
-            yield event("negotiation_turn", "negotiation", log)
 
+        # Label each seller turn before yielding it, so the streamed
+        # negotiation_turn event already carries pioneer_labels/extracted_fields
+        # (the ActivityFeed's "Labeled: ..." line reads off this same event).
         pioneer_labels = []
         for log in conversation_logs:
             if log["speaker"] == "seller":
@@ -201,6 +202,7 @@ def run_demo_stream(request: dict) -> Generator[dict, None, None]:
                 log["risk_level"] = label_result.get("risk_level", "unknown")
                 log["extracted_fields"] = label_result.get("extracted_fields", {})
                 pioneer_labels.append(label_result)
+            yield event("negotiation_turn", "negotiation", log)
 
         def _enrich(result: dict, offer: dict) -> dict:
             if result["status"] == "passed":
