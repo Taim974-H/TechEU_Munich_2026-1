@@ -1,3 +1,4 @@
+import json
 import os
 import time
 import uuid
@@ -291,6 +292,22 @@ def run_demo_stream(request: dict) -> Generator[dict, None, None]:
 
     except Exception as exc:
         yield event("error", "error", {"message": str(exc)})
+
+
+def _adapt_tavily(raw: dict) -> dict:
+    results = raw.get("results", [])
+    return {
+        "triggered": bool(results),
+        "reason": raw.get("query", ""),
+        "results": [
+            {
+                "title": r.get("title", ""),
+                "snippet": r.get("content", ""),
+                "source": r.get("url", ""),
+            }
+            for r in results
+        ],
+    }
 
 
 def run_demo(request: dict) -> dict:

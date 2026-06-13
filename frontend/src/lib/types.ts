@@ -141,6 +141,7 @@ export interface DemoResult {
   final_recommendation: FinalRecommendation;
   deal_card_path: string;
   demo_mode: boolean;
+  session_id?: string;
 }
 
 // Phase 3 — streaming + inline human-in-the-loop ------------------------

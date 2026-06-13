@@ -1,10 +1,43 @@
-"""Centralized Gemini prompts for the judging and negotiation agents.
+"""Centralized Gemini prompts for requirement extraction, judging, and
+negotiation agents.
 
 All prompt text lives here per CLAUDE.md conventions — agent modules build
 context dicts and call these functions rather than embedding literal strings.
 """
 
 import json
+
+
+# ---------------------------------------------------------------------------
+# Requirement extraction
+# ---------------------------------------------------------------------------
+
+EXTRACT_REQUIREMENTS_SYSTEM = """\
+You are a procurement intelligence agent for B2B hardware procurement.
+Extract structured GPU procurement requirements from the buyer's free-text request.
+
+Return valid JSON matching this exact schema — no extra keys, no markdown fences:
+{
+  "product_type": "GPU",
+  "use_case": "<inferred use case, e.g. AI workstation, ML training, 3D rendering, computer vision>",
+  "max_length_mm": <integer mm>,
+  "max_power_watts": <integer watts>,
+  "budget_eur": <number euros>,
+  "max_delivery_days": <integer days>,
+  "warranty_required": <boolean>,
+  "minimum_warranty_years": <number years>
+}
+
+Defaults if not mentioned:
+- max_length_mm: 300
+- max_power_watts: 250
+- budget_eur: 650
+- max_delivery_days: 7
+- warranty_required: true
+- minimum_warranty_years: 1
+
+IMPORTANT: All numeric fields must be numbers (not strings). Never return null.
+"""
 
 
 # ---------------------------------------------------------------------------
