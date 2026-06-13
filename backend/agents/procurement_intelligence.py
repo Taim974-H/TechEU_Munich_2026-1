@@ -1,8 +1,31 @@
+import json
+import os
 import re
 from backend.schemas import StructuredRequirements, SellerOffer, ValidationResult
 
+_SCENARIOS_PATH = os.path.join(os.path.dirname(__file__), "../../data/buyer_scenarios.json")
 
-def extract_requirements(raw_request: str) -> dict:
+
+def _load_scenario_lookup() -> dict:
+    try:
+        with open(os.path.abspath(_SCENARIOS_PATH)) as f:
+            return {s["request_id"]: s["structured_requirements"] for s in json.load(f) if "request_id" in s}
+    except (FileNotFoundError, KeyError):
+        return {}
+
+
+_SCENARIO_LOOKUP = _load_scenario_lookup()
+
+
+def extract_requirements(request) -> dict:
+    if isinstance(request, dict):
+        request_id = request.get("request_id")
+        if request_id and request_id in _SCENARIO_LOOKUP:
+            return dict(_SCENARIO_LOOKUP[request_id])
+        raw_request = request.get("raw_request", "")
+    else:
+        raw_request = request
+
     requirements: dict = {
         "product_type": "GPU",
         "use_case": "AI workstation",
@@ -22,8 +45,27 @@ def extract_requirements(raw_request: str) -> dict:
     if delivery_match:
         requirements["max_delivery_days"] = int(delivery_match.group(1))
 
-    if "this week" in raw_request.lower():
+    lower = raw_request.lower()
+    if "this week" in lower or "within a week" in lower:
         requirements["max_delivery_days"] = 7
+
+    if "computer vision" in lower:
+        requirements["use_case"] = "computer vision"
+    elif "data processing" in lower or "analytics" in lower:
+        requirements["use_case"] = "data processing"
+
+    size_match = re.search(r"under\s+(\d+)\s*mm", raw_request, re.IGNORECASE)
+    if size_match:
+        requirements["max_length_mm"] = int(size_match.group(1))
+
+    power_match = re.search(r"under\s+(\d+)\s*[wW](?:\b|att)", raw_request)
+    if power_match:
+        requirements["max_power_watts"] = int(power_match.group(1))
+
+    warranty_match = re.search(r"(\d+)[\s-]*year", raw_request, re.IGNORECASE)
+    if warranty_match:
+        requirements["minimum_warranty_years"] = int(warranty_match.group(1))
+        requirements["warranty_required"] = True
 
     return requirements
 

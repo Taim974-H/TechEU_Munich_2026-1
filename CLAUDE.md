@@ -860,10 +860,10 @@ Prioritize in this order:
 * Developer 2: ✓ negotiation loop live (premium-open → buyer counter → seller concession), value scoring, escalation enriched with price/delivery, `seller_name` crash fixed.
 * Developer 3: build synthetic data and integration stubs.
 
-#### Hour 3–5: Parallel build block 2
+#### Hour 3–5: Parallel build block 2 ✓ COMPLETE (Developer 2)
 
 * Phillip: connect UI to mock outputs and add status labels.
-* Developer 2: implement local negotiation and validation loop.
+* Developer 2: ✓ scenario lookup for exact canonical requirements, richer audit narrative, specific supplier reasons, multi-violation round-2 counters, violation-aware seller alternatives, "best we can do" honesty when no alternative exists.
 * Developer 3: add Pioneer/Tavily/fal wrappers and fallback responses.
 
 #### Hour 5–7: First integration merge
@@ -1004,12 +1004,17 @@ All files exist and the end-to-end demo flow runs in `DEMO_MODE=true` with no AP
 - Polish `streamlit_app.py` — add Pactum branding, better layout, agent status indicators.
 - Do not change `run_demo()` call signature or result keys.
 
-**Developer 2 (feature/orchestrator-agents)** — Hour 1–3 complete
+**Developer 2 (feature/orchestrator-agents)** — Hour 1–3 and Hour 3–5 complete
 - ✓ Negotiation loop fires: premium-open → buyer counter → seller concession.
-- ✓ Value scoring: `compute_value_score()` in `procurement_intelligence.py` ranks passing offers by price+delivery.
-- ✓ Escalation enriched with price, delivery, and score.
-- ✓ `seller_name` KeyError crash fixed in `buyer_agent.py`.
-- Next (Hour 3–5): improve `extract_requirements()` with smarter keyword/regex parsing for size, power, warranty; do not break `run_demo()` return shape.
+- ✓ Value scoring: `compute_value_score()` ranks passing offers by price (−15) and delivery (−10).
+- ✓ Escalation question shows score, price, and delivery days.
+- ✓ `seller_name` KeyError crash fixed.
+- ✓ `extract_requirements()` uses lookup table keyed on `request_id` for exact canonical values (REQ-001/002/003); falls back to keyword/regex for unknown requests.
+- ✓ `audit_summary` builds per-vendor narrative from structured offer data (product, price, delivery, warranty, rejection reasons).
+- ✓ Supplier match reasons are specific: product count, min price, fastest delivery.
+- ✓ Round-2 buyer counter covers price, delivery, and warranty violations in one message.
+- ✓ `request_alternative()` searches fully-compliant alternatives first; returns `None` (not current offer) when nothing better exists — seller says "best we can do" honestly.
+- Next (Hour 5–7): merge into `staging-demo` with Phillip and Developer 3.
 
 **Developer 3 (feature/integrations-data)**
 - Add real Pioneer API calls to `pioneer_client.py` when key is available.

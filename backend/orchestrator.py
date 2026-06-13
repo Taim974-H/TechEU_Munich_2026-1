@@ -23,7 +23,7 @@ DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() == "true"
 def run_demo(request: dict) -> dict:
     demo_mode = DEMO_MODE
 
-    structured_requirements = extract_requirements(request.get("raw_request", ""))
+    structured_requirements = extract_requirements(request)
 
     matched_suppliers = match_suppliers(structured_requirements)
 
@@ -58,7 +58,7 @@ def run_demo(request: dict) -> dict:
     escalation_result = check_escalation(validation_results, structured_requirements, best_offer)
 
     audit_summary = generate_summary(
-        structured_requirements, matched_suppliers, conversation_logs, validation_results, escalation_result
+        structured_requirements, matched_suppliers, conversation_logs, validation_results, escalation_result, raw_offers
     )
 
     if best_offer:
