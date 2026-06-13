@@ -110,7 +110,7 @@ export function SellerWorkspace({ onLogout, accountLabel = "Vendor Console" }: S
   };
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-[#f4f5f9] text-text-1">
+    <div className="flex h-screen flex-col overflow-hidden bg-[#edf0f7] text-text-1">
 
       {/* Header */}
       <header className="flex h-14 shrink-0 items-center justify-between border-b border-border bg-white px-6">
@@ -145,11 +145,11 @@ export function SellerWorkspace({ onLogout, accountLabel = "Vendor Console" }: S
       <div className="flex min-h-0 flex-1 overflow-hidden">
 
         {/* ── LEFT: expandable supplier cards ──────────────────────────── */}
-        <aside className="flex w-[300px] shrink-0 flex-col border-r border-border bg-[#f4f5f9]">
+        <aside className="flex w-[300px] shrink-0 flex-col border-r border-border bg-white">
           <div className="flex items-center justify-between px-4 py-3.5">
             <div className="flex items-center gap-2">
               <span className="text-[15px] font-bold text-text-1">Suppliers</span>
-              <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-text-3 shadow-[0_1px_2px_rgba(0,0,0,0.06)]">
+              <span className="rounded-full bg-surface px-2 py-0.5 text-[11px] font-semibold text-text-3">
                 {matchedSuppliers.length}
               </span>
             </div>
@@ -167,16 +167,20 @@ export function SellerWorkspace({ onLogout, accountLabel = "Vendor Console" }: S
                 <motion.div
                   key={seller.seller_id}
                   layout
-                  className="overflow-hidden rounded-2xl border border-border bg-white"
-                  style={{ boxShadow: active ? "0 2px 12px rgba(47,111,237,0.10), 0 1px 3px rgba(0,0,0,0.06)" : "0 1px 3px rgba(0,0,0,0.05)" }}
+                  className={`overflow-hidden rounded-2xl border bg-white transition-colors ${active ? "border-accent-border" : "border-border"}`}
+                  style={{
+                    boxShadow: active
+                      ? "inset 3px 0 0 #2f6fed, 0 4px 16px rgba(47,111,237,0.12), 0 1px 4px rgba(0,0,0,0.06)"
+                      : "0 1px 3px rgba(0,0,0,0.05)",
+                  }}
                   transition={{ duration: 0.25, ease: EASE_OUT }}
                 >
                   {/* Card header — always visible */}
                   <button
                     type="button"
                     onClick={() => selectSeller(seller.seller_id)}
-                    className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors active:scale-[0.99]"
-                    style={{ transition: "transform 160ms ease-out" }}
+                    className={`flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors ${active ? "bg-accent-soft/30" : "hover:bg-[#f8f9fc]"}`}
+                    style={{ transition: "background-color 150ms ease-out, transform 160ms ease-out" }}
                   >
                     {/* Avatar */}
                     <span
@@ -292,7 +296,7 @@ export function SellerWorkspace({ onLogout, accountLabel = "Vendor Console" }: S
           <div className="flex shrink-0 items-center justify-between border-b border-border bg-white px-6 py-3.5">
             <div className="flex items-center gap-2">
               <span className="text-[15px] font-bold text-text-1">Negotiations</span>
-              <span className="rounded-full bg-[#f4f5f9] px-2 py-0.5 text-[11px] font-semibold text-text-3">
+              <span className="rounded-full bg-surface px-2 py-0.5 text-[11px] font-semibold text-text-3">
                 {activeNegotiations[0]?.logs.length ?? 0} messages
               </span>
             </div>
@@ -308,8 +312,12 @@ export function SellerWorkspace({ onLogout, accountLabel = "Vendor Console" }: S
           <div className="flex-1 overflow-y-auto space-y-3 p-5">
             {activeNegotiations.map(({ sellerId, seller, logs, lastMsg, roundCount, validation }) => {
               if (!logs.length) return (
-                <div key={sellerId} className="flex h-full items-center justify-center text-[13px] text-text-3">
-                  No negotiations for this supplier yet.
+                <div key={sellerId} className="flex h-full flex-col items-center justify-center gap-2 py-20 text-center">
+                  <span className="grid h-12 w-12 place-items-center rounded-2xl bg-white shadow-[0_1px_4px_rgba(0,0,0,0.06)]">
+                    <ArrowRight className="h-5 w-5 text-text-3" weight="bold" />
+                  </span>
+                  <p className="text-[13px] font-medium text-text-2">No negotiations yet</p>
+                  <p className="text-[12px] text-text-3">Messages appear here as the pipeline runs.</p>
                 </div>
               );
               const palette = avatarPalette(sellerId);
@@ -318,7 +326,16 @@ export function SellerWorkspace({ onLogout, accountLabel = "Vendor Console" }: S
                 <article
                   key={sellerId}
                   className="rounded-2xl border border-border bg-white p-5"
-                  style={{ boxShadow: "0 1px 4px rgba(0,0,0,0.05), 0 4px 16px rgba(0,0,0,0.04)" }}
+                  style={{
+                    boxShadow: "0 1px 4px rgba(0,0,0,0.05), 0 4px 20px rgba(0,0,0,0.06)",
+                    borderLeft: validation?.status === "passed"
+                      ? "3px solid var(--success)"
+                      : validation?.status === "rejected"
+                      ? "3px solid var(--danger)"
+                      : validation?.status === "negotiable"
+                      ? "3px solid var(--warning)"
+                      : undefined,
+                  }}
                 >
                   {/* Avatar header */}
                   <div className="mb-3 flex items-center justify-between gap-3">
@@ -380,7 +397,7 @@ export function SellerWorkspace({ onLogout, accountLabel = "Vendor Console" }: S
                           <div className={`max-w-[80%] rounded-xl px-3 py-2 ${
                             log.speaker === "buyer"
                               ? "bg-accent-soft"
-                              : "bg-[#f4f5f9]"
+                              : "bg-surface"
                           }`}>
                             <div className="flex items-center gap-2 mb-0.5">
                               <span className="text-[10px] font-semibold capitalize text-text-3">
@@ -416,26 +433,31 @@ export function SellerWorkspace({ onLogout, accountLabel = "Vendor Console" }: S
             const palette = avatarPalette(activeSeller.seller_id);
             const initial = activeSeller.seller_name.trim()[0]?.toUpperCase() ?? "?";
             return (
-              <div className="shrink-0 border-b border-border px-5 py-5">
+              <div className="shrink-0 border-b border-border bg-gradient-to-b from-accent-soft/40 to-white px-5 pb-5 pt-5">
                 <div className="flex items-center gap-3.5">
                   <span
-                    className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full text-[22px] font-bold"
+                    className="flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-full text-[20px] font-bold shadow-[0_0_0_2px_white,0_0_0_3px_rgba(47,111,237,0.15)]"
                     style={{ background: palette.bg, color: palette.text }}
                   >
                     {initial}
                   </span>
                   <div className="min-w-0">
-                    <p className="truncate text-[16px] font-bold leading-tight text-text-1">{activeSeller.seller_name}</p>
-                    <p className="mt-0.5 text-[12px] capitalize text-text-3">
+                    <p className="truncate text-[15px] font-bold leading-tight text-text-1">{activeSeller.seller_name}</p>
+                    <p className="mt-0.5 text-[11px] capitalize text-text-3">
                       {activeSeller.region} · {activeSeller.negotiation_style}
                     </p>
                   </div>
                 </div>
-                <p className="mt-3 text-[11px] text-text-3">
-                  <span className="font-semibold text-text-2">{Math.round(activeSeller.match_score * 100)}%</span> match
-                  {" · "}
-                  <span className="font-semibold text-text-2">{Math.round(activeSeller.reliability_score * 100)}%</span> reliable
-                </p>
+                <div className="mt-3 flex items-center gap-3">
+                  <div className="flex-1 rounded-lg border border-border bg-white/70 px-3 py-2">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-3">Match</div>
+                    <div className="mt-0.5 text-[14px] font-bold text-accent">{Math.round(activeSeller.match_score * 100)}%</div>
+                  </div>
+                  <div className="flex-1 rounded-lg border border-border bg-white/70 px-3 py-2">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-3">Reliable</div>
+                    <div className="mt-0.5 text-[14px] font-bold text-text-1">{Math.round(activeSeller.reliability_score * 100)}%</div>
+                  </div>
+                </div>
               </div>
             );
           })()}
@@ -443,7 +465,7 @@ export function SellerWorkspace({ onLogout, accountLabel = "Vendor Console" }: S
           {/* Products header */}
           <div className="flex shrink-0 items-center gap-2 border-b border-border px-5 py-3">
             <span className="text-[13px] font-semibold text-text-1">Products</span>
-            <span className="rounded-full bg-[#f4f5f9] px-1.5 py-0.5 text-[11px] font-semibold text-text-3">
+            <span className="rounded-full bg-surface px-1.5 py-0.5 text-[11px] font-semibold text-text-3">
               {activeProducts.length}
             </span>
           </div>
