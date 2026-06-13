@@ -96,7 +96,9 @@ def _coerce_requirements(parsed: dict) -> dict | None:
 
 def extract_requirements(request) -> dict:
     raw_request = request.get("raw_request", "") if isinstance(request, dict) else str(request)
-    demo_mode = os.getenv("DEMO_MODE", "false").lower() == "true"
+    from backend.config import get_env_bool
+
+    demo_mode = get_env_bool("DEMO_MODE", False)
 
     if not demo_mode:
         prompt = f"Extract structured procurement requirements from this buyer request:\n\n{raw_request}"

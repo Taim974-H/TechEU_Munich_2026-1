@@ -3,9 +3,10 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
+from backend.config import get_env_url, get_env_str
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
+SUPABASE_URL = get_env_url("SUPABASE_URL", "")
+SUPABASE_ANON_KEY = get_env_str("SUPABASE_ANON_KEY", "")
 
 _DATA_DIR = os.path.join(os.path.dirname(__file__), "../data")
 _client = None

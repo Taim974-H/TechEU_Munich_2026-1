@@ -25,7 +25,9 @@ from integrations.fallback_outputs import (
 )
 
 load_dotenv()
-DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() == "true"
+from backend.config import get_env_bool
+
+DEMO_MODE = get_env_bool("DEMO_MODE", False)
 
 PASSING_VERDICTS = ("good", "borderline")
 
