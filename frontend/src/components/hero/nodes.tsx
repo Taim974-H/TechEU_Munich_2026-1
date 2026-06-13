@@ -47,22 +47,23 @@ export function RequestNode({
   return (
     <motion.div
       {...SPAWN}
-      className={`rounded-xl bg-white px-3.5 py-3 ${ringBase} ${ringState(data)}`}
+      style={{ minWidth: 220 }}
+      className={`rounded-xl bg-white px-5 py-4 ${ringBase} ${ringState(data)}`}
     >
       <Handle type="source" position={Position.Right} className="!opacity-0" />
-      <div className="flex items-center gap-2.5">
+      <div className="flex items-center gap-3">
         <span
-          className={`grid h-8 w-8 place-items-center rounded-lg transition-colors duration-200 ${
+          className={`grid h-10 w-10 shrink-0 place-items-center rounded-lg transition-colors duration-200 ${
             data.active || data.done ? "bg-accent-soft text-accent" : "bg-surface text-text-3"
           }`}
         >
-          <FileText weight="duotone" className="h-4 w-4" />
+          <FileText weight="duotone" className="h-5 w-5" />
         </span>
         <div className="leading-tight">
           <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-text-3">
             Request
           </div>
-          <div className="text-[13px] font-semibold tracking-tight text-text-1">
+          <div className="text-[14px] font-semibold tracking-tight text-text-1">
             {data.label}
           </div>
         </div>
@@ -88,6 +89,7 @@ export function OrchestratorNode({
   return (
     <motion.div
       {...SPAWN}
+      style={{ minWidth: 240 }}
       className={`relative rounded-xl bg-white px-5 py-4 ${ringBase} ${ringState(data)}`}
     >
       <Handle type="target" position={Position.Left} className="!opacity-0" />
@@ -161,23 +163,24 @@ export function BuyerAgentNode({
   return (
     <motion.div
       {...SPAWN}
-      className={`rounded-xl bg-white px-4 py-3.5 ${ringBase} ${ringState(data)}`}
+      style={{ minWidth: 220 }}
+      className={`rounded-xl bg-white px-5 py-4 ${ringBase} ${ringState(data)}`}
     >
       <Handle type="target" position={Position.Left} className="!opacity-0" />
       <Handle type="source" position={Position.Right} className="!opacity-0" />
-      <div className="flex items-center gap-2.5">
+      <div className="flex items-center gap-3">
         <span
-          className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg transition-colors duration-200 ${
+          className={`grid h-10 w-10 shrink-0 place-items-center rounded-lg transition-colors duration-200 ${
             data.active || data.done ? "bg-accent-soft text-accent" : "bg-surface text-text-3"
           }`}
         >
-          <Handshake weight="duotone" className="h-4 w-4" />
+          <Handshake weight="duotone" className="h-5 w-5" />
         </span>
         <div className="leading-tight">
           <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-text-3">
             Buyer Agent
           </div>
-          <div className="text-[13px] font-semibold tracking-tight text-text-1">
+          <div className="text-[14px] font-semibold tracking-tight text-text-1">
             Negotiates
           </div>
         </div>
@@ -234,7 +237,7 @@ export function SellerNode({
   return (
     <motion.div
       {...SPAWN}
-      style={{ width: 220 }}
+      style={{ width: 260 }}
       className={`group relative overflow-hidden rounded-xl bg-white ${ringBase} ${ring} ${
         data.interactive ? "cursor-pointer active:scale-[0.98]" : ""
       }`}
@@ -288,7 +291,7 @@ export function SellerNode({
           >
             <div
               ref={scrollRef}
-              className="flex max-h-[100px] flex-col gap-1.5 overflow-y-auto p-2.5"
+              className="flex max-h-[180px] flex-col gap-1.5 overflow-y-auto p-2.5"
             >
               {chatLines.map((log, i) => (
                 <motion.div

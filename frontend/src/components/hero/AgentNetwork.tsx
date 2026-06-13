@@ -71,10 +71,10 @@ export function AgentNetwork({
       return Math.max(max, r);
     }, 0);
 
-    const COL = { request: 20, orchestrator: 240, buyer: 470, sellers: 710 };
-    const ROW_CENTER = 260;
-    // 200px spacing: accommodates 56px header + 100px chat + 44px gap
-    const SELLER_SPACING = 200;
+    const COL = { request: 20, orchestrator: 280, buyer: 570, sellers: 860 };
+    const ROW_CENTER = 300;
+    // 280px spacing: accommodates 60px header + 180px chat + 40px gap
+    const SELLER_SPACING = 280;
     const sellersTopY = ROW_CENTER - ((sellers.length - 1) * SELLER_SPACING) / 2;
 
     const allNodes: Node[] = [

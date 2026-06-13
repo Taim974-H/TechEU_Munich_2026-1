@@ -37,19 +37,19 @@ export function DecisionScreen({ result, decision, onDecide }: Props) {
         onDecide={onDecide}
       />
 
-      <AccordionSection title="Audit Summary" defaultOpen>
+      <AccordionSection title="Audit Summary" dotColor="bg-accent" defaultOpen>
         <div className="pt-4">
-          <AuditSummary summary={result.audit_summary} />
+          <AuditSummary summary={result.audit_summary} results={result.validation_results} />
         </div>
       </AccordionSection>
 
-      <AccordionSection title="Supplier Comparison">
+      <AccordionSection title="Supplier Comparison" dotColor="bg-success">
         <div className="pt-4">
           <SupplierGrid suppliers={result.matched_suppliers} />
         </div>
       </AccordionSection>
 
-      <AccordionSection title="Validation Results">
+      <AccordionSection title="Validation Results" dotColor="bg-warning">
         <div className="pt-4">
           <ValidationTable
             results={result.validation_results}
@@ -252,10 +252,12 @@ function Chip({
 
 function AccordionSection({
   title,
+  dotColor,
   children,
   defaultOpen = false,
 }: {
   title: string;
+  dotColor?: string;
   children: React.ReactNode;
   defaultOpen?: boolean;
 }) {
@@ -263,12 +265,16 @@ function AccordionSection({
 
   return (
     <div className="overflow-hidden rounded-2xl border border-border bg-white shadow-[var(--shadow-sm)]">
-      {/* Header row — pill style */}
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between px-6 py-4 transition-colors hover:bg-surface active:bg-surface-2"
+        className="flex w-full items-center justify-between px-6 py-[14px] transition-colors hover:bg-surface active:bg-surface-2"
       >
-        <span className="text-[13px] font-semibold text-text-1">{title}</span>
+        <div className="flex items-center gap-2.5">
+          {dotColor && (
+            <span className={`h-2 w-2 shrink-0 rounded-full ${dotColor}`} />
+          )}
+          <span className="text-[13px] font-semibold text-text-1">{title}</span>
+        </div>
         <motion.span
           animate={{ rotate: open ? 45 : 0 }}
           transition={{ duration: 0.18, ease: EASE_OUT }}

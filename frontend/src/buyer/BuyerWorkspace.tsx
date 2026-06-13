@@ -436,24 +436,23 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
       {/* ── STEP 3: DECISION ─────────────────────────────────────────────── */}
       {step === 3 && (
         <div ref={stepRef} className="flex h-screen flex-col">
-          <header className="flex h-12 shrink-0 items-center justify-between border-b border-border bg-white px-8">
+          <TopBar onLogout={logout} />
+          <div className="flex h-10 shrink-0 items-center gap-3 border-b border-border bg-white px-8">
             <button
               onClick={() => setStep(2)}
-              className="text-[12px] font-medium text-text-3 transition-colors hover:text-text-1"
+              className="text-[12px] font-medium text-text-3 transition-colors hover:text-text-1 active:scale-[0.97]"
             >
               ← Back to network
             </button>
+            <span className="h-3 w-px bg-border" />
             <span className="text-[12px] font-semibold text-text-1">Decision Required</span>
-            <button
-              onClick={logout}
-              className="text-[12px] font-medium text-accent hover:text-accent/80"
-            >
-              Sign out
-            </button>
-          </header>
+          </div>
 
-          <div className="flex-1 overflow-auto bg-surface">
-            <div className="mx-auto max-w-[860px] px-8 py-6">
+          <div
+            className="flex-1 overflow-auto"
+            style={{ background: "radial-gradient(ellipse 80% 40% at 50% 0%, rgba(47,111,237,0.05) 0%, #f4f5f9 55%)" }}
+          >
+            <div className="mx-auto max-w-[920px] px-8 py-6">
               {result && (
                 <DecisionScreen
                   result={result}
