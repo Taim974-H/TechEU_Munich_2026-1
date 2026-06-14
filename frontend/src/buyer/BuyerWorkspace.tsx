@@ -324,7 +324,21 @@ export function BuyerWorkspace({ onLogout, accountLabel = "Horizon Analytics Gmb
             renegotiate_used: d.renegotiate_used,
             has_winning_offer: d.has_winning_offer,
           };
-          const decisionSellerId = lastNegotiationSellerRef.current;
+
+          // In parallel negotiation, match seller by name from best_offer
+          const sellerName = d.best_offer?.seller_name;
+          const suppliers = result?.matched_suppliers ?? liveSuppliers;
+          let decisionSellerId = lastNegotiationSellerRef.current; // fallback
+
+          if (sellerName) {
+            // Find seller by name (more reliable in parallel)
+            const matchedSupplier = suppliers.find(s => s.seller_name === sellerName);
+            if (matchedSupplier) {
+              decisionSellerId = matchedSupplier.seller_id;
+              lastNegotiationSellerRef.current = decisionSellerId;
+            }
+          }
+
           // Add this escalation to the set of active escalations (supports parallel)
           setActiveEscalations(prev => new Map([...prev, [decisionSellerId, escalation]]));
           setVisibleNodeIds(prev => new Set([...prev, `decision-${decisionSellerId}`]));
