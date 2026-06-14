@@ -1,0 +1,21 @@
+[
+  {
+    "seller_id": "vendor_b",
+    "message": "We can reduce the price to EUR 650 if delivery next week is acceptable.",
+    "labels": ["price_concession", "delivery_condition"],
+    "risk_level": "low"
+  },
+  {
+    "seller_id": "vendor_c",
+    "message": "We can deliver in 3 days, but the final price remains EUR 690.",
+    "labels": ["delivery_condition", "technical_information"],
+    "risk_level": "low"
+  },
+  {
+    "seller_id": "vendor_a",
+    "message": "The RTX 4080 is available, but it draws 320 W and is 320 mm long.",
+    "labels": ["technical_information"],
+    "risk_level": "medium"
+  }
+]
+
