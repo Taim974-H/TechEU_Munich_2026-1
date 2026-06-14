@@ -325,16 +325,12 @@ export function BuyerWorkspace({ onLogout, accountLabel = "Horizon Analytics Gmb
             has_winning_offer: d.has_winning_offer,
           };
 
-          // Show a decision node for every supplier that has negotiated
+          // Show a decision node for every matched supplier — human_alert fires
+          // only after ALL negotiations complete, so every supplier is ready.
+          // Do NOT filter by nodeChatLines here: the SSE closure may be stale.
           const allSuppliers = result?.matched_suppliers ?? liveSuppliers;
-          const suppliersWithChats = allSuppliers.filter(
-            s => (nodeChatLines[s.seller_id]?.length ?? 0) > 0,
-          );
-          // Fallback: if no chats yet, use all matched suppliers
-          const decisionTargets = suppliersWithChats.length > 0 ? suppliersWithChats : allSuppliers;
-
           const allEscalations = new Map<string, EscalationResult>();
-          for (const s of decisionTargets) {
+          for (const s of allSuppliers) {
             allEscalations.set(s.seller_id, { ...escalation });
           }
           setActiveEscalations(allEscalations);
