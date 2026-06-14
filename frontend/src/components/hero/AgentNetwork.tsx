@@ -10,18 +10,24 @@ import {
 } from "@xyflow/react";
 import { useEffect, useRef, useMemo } from "react";
 import {
+  AuditNode,
   BuyerAgentNode,
   ClusteringNode,
+  FalNode,
   JudgingWallNode,
   MatchingNode,
   NegotiationNode,
   OrchestratorNode,
+  PioneerNode,
   ProcurementIntelNode,
   RequestNode,
   SellerNode,
+  SubAgentNode,
+  TavilyNode,
 } from "./nodes";
 import { MessageEdge } from "./MessageEdge";
 import type { ConversationLog, JudgedCandidate, MatchedSupplier } from "@/lib/types";
+import { displayName } from "@/lib/api";
 
 interface Props {
   stageIndex: number;
@@ -44,6 +50,11 @@ const nodeTypes = {
   matching: MatchingNode,
   judging: JudgingWallNode,
   negotiation: NegotiationNode,
+  subagent: SubAgentNode,
+  pioneer: PioneerNode,
+  tavily: TavilyNode,
+  audit: AuditNode,
+  fal: FalNode,
   // backwards-compat alias kept in case anything references it by string
   buyerAgent: BuyerAgentNode,
   seller: SellerNode,
@@ -75,12 +86,26 @@ export function AgentNetwork({
     const clusterMatchActive = stageIndex === 1;
     const clusterMatchDone = stageIndex > 1;
 
-    // Judging is active during the match stage (stage 1) and done once negotiate starts
     const judgingActive = stageIndex === 1;
     const judgingDone = stageIndex > 1;
 
     const negotiateActive = stageIndex === 2;
     const negotiateDone = stageIndex > 2;
+
+    const pioneerActive = stageIndex === 3 && visibleNodeIds.has("pioneer") && !visibleNodeIds.has("pioneer-done");
+    const pioneerDone = visibleNodeIds.has("pioneer-done");
+
+    const tavilyActive = visibleNodeIds.has("tavily") && !visibleNodeIds.has("tavily-done");
+    const tavilyDone = visibleNodeIds.has("tavily-done");
+
+    const auditActive = stageIndex === 5 && visibleNodeIds.has("audit") && !visibleNodeIds.has("audit-done");
+    const auditDone = visibleNodeIds.has("audit-done");
+
+    const falActive = visibleNodeIds.has("fal") && !visibleNodeIds.has("fal-done");
+    const falDone = visibleNodeIds.has("fal-done");
+
+    const subAgentsActive = negotiateActive;
+    const subAgentsDone = negotiateDone;
 
     const goodCount = judgedCandidates.filter(c => c.verdict === "good").length;
     const borderlineCount = judgedCandidates.filter(c => c.verdict === "borderline").length;
@@ -105,12 +130,17 @@ export function AgentNetwork({
       request:      0,
       orchestrator: 300,
       procurement:  570,
-      clusterMatch: 840,   // clustering top, matching bottom stacked in this column
+      clusterMatch: 840,
+      tavily:       840,   // below clusterMatch column
       judging:      1120,
       negotiation:  1400,
+      subagents:    1400,  // fan out above/below negotiation
       sellers:      1690,
+      pioneer:      1690,  // below sellers column
+      audit:        1990,
+      fal:          1990,  // below audit
     };
-    const SELLER_SPACING = 300; // vertical gap between stacked seller nodes
+    const SELLER_SPACING = 300;
     const sellersTopY = CY - ((sellers.length - 1) * SELLER_SPACING) / 2;
 
     const allNodes: Node[] = [
@@ -170,12 +200,24 @@ export function AgentNetwork({
         draggable: false,
         selectable: false,
       },
+      // Negotiation sub-agents — fan above/below the negotiation node
+      { id: "sub-price",    type: "subagent", position: { x: COL.subagents, y: CY - 340 }, data: { label: "Price",    icon: "price",    active: subAgentsActive, done: subAgentsDone }, draggable: false, selectable: false },
+      { id: "sub-delivery", type: "subagent", position: { x: COL.subagents, y: CY - 210 }, data: { label: "Delivery", icon: "delivery", active: subAgentsActive, done: subAgentsDone }, draggable: false, selectable: false },
+      { id: "sub-warranty", type: "subagent", position: { x: COL.subagents, y: CY + 150 }, data: { label: "Warranty", icon: "warranty", active: subAgentsActive, done: subAgentsDone }, draggable: false, selectable: false },
+      { id: "sub-risk",     type: "subagent", position: { x: COL.subagents, y: CY + 280 }, data: { label: "Risk",     icon: "risk",     active: subAgentsActive, done: subAgentsDone }, draggable: false, selectable: false },
+      // Tavily — below the cluster/match column, only when triggered
+      { id: "tavily", type: "tavily", position: { x: COL.tavily, y: CY + 210 }, data: { active: tavilyActive, done: tavilyDone }, draggable: false, selectable: false },
+      // Pioneer — below sellers
+      { id: "pioneer", type: "pioneer", position: { x: COL.pioneer, y: sellersTopY + sellers.length * SELLER_SPACING + 60 }, data: { active: pioneerActive, done: pioneerDone, labeledCount: visibleNodeIds.has("pioneer-done") ? undefined : undefined }, draggable: false, selectable: false },
+      // Audit and fal — after sellers column
+      { id: "audit", type: "audit", position: { x: COL.audit, y: CY - 80 }, data: { active: auditActive, done: auditDone }, draggable: false, selectable: false },
+      { id: "fal",   type: "fal",   position: { x: COL.fal,   y: CY + 80 }, data: { active: falActive,   done: falDone   }, draggable: false, selectable: false },
       ...sellers.map<Node>((s, i) => ({
         id: s.seller_id,
         type: "seller",
         position: { x: COL.sellers, y: sellersTopY + i * SELLER_SPACING },
         data: {
-          label: s.seller_name,
+          label: displayName(s.seller_name),
           match: s.match_score,
           highlight: s.seller_id === bestSellerId && stageIndex >= 1,
           active: negotiateActive,
@@ -254,6 +296,20 @@ export function AgentNetwork({
         style: liveStyle(negotiateActive),
         data: { live: negotiateActive, delay: i * 60 },
       })),
+      // Sub-agent edges from negotiation node
+      { id: "neg-price",    source: "negotiation", target: "sub-price",    type: "smoothstep", style: liveStyle(subAgentsActive || subAgentsDone) },
+      { id: "neg-delivery", source: "negotiation", target: "sub-delivery", type: "smoothstep", style: liveStyle(subAgentsActive || subAgentsDone) },
+      { id: "neg-warranty", source: "negotiation", target: "sub-warranty", type: "smoothstep", style: liveStyle(subAgentsActive || subAgentsDone) },
+      { id: "neg-risk",     source: "negotiation", target: "sub-risk",     type: "smoothstep", style: liveStyle(subAgentsActive || subAgentsDone) },
+      // Tavily from matching
+      { id: "match-tavily", source: "matching", target: "tavily", type: "smoothstep", style: liveStyle(tavilyActive || tavilyDone) },
+      // Pioneer from sellers (first seller is the source, or negotiation if no sellers yet)
+      ...(sellers.length > 0
+        ? [{ id: "sel-pioneer", source: sellers[0].seller_id, target: "pioneer", type: "smoothstep", style: liveStyle(pioneerActive || pioneerDone) }]
+        : [{ id: "neg-pioneer", source: "negotiation", target: "pioneer", type: "smoothstep", style: liveStyle(pioneerActive || pioneerDone) }]),
+      // Pioneer → audit, audit → fal (sequential post-negotiation pipeline)
+      { id: "pioneer-audit", source: "pioneer", target: "audit", type: "smoothstep", style: liveStyle(auditActive || auditDone) },
+      { id: "audit-fal",     source: "audit",   target: "fal",   type: "smoothstep", style: liveStyle(falActive || falDone) },
     ];
 
     // Only show nodes that have been revealed; only draw edges where both ends are visible
@@ -279,6 +335,8 @@ export function AgentNetwork({
     () => Object.values(chatLines).reduce((sum, lines) => sum + lines.length, 0),
     [chatLines],
   );
+
+  const sellerIds = useMemo(() => suppliers.map((s) => s.seller_id), [suppliers]);
 
   return (
     <div className="relative h-full overflow-hidden border border-border bg-white shadow-[var(--shadow-sm)]">
@@ -310,7 +368,12 @@ export function AgentNetwork({
           size={1.2}
           color="#d1d5db"
         />
-        <FlowAutoFit nodeCount={nodes.length} totalChatLines={totalChatLines} />
+        <FlowAutoFit
+          nodeCount={nodes.length}
+          totalChatLines={totalChatLines}
+          stageIndex={stageIndex}
+          sellerIds={sellerIds}
+        />
       </ReactFlow>
 
       <div className="pointer-events-none absolute left-5 top-4 flex flex-col gap-0.5">
@@ -332,29 +395,63 @@ export function AgentNetwork({
 function FlowAutoFit({
   nodeCount,
   totalChatLines,
+  stageIndex,
+  sellerIds,
 }: {
   nodeCount: number;
   totalChatLines: number;
+  stageIndex: number;
+  sellerIds: string[];
 }) {
   const { fitView } = useReactFlow();
   const prevCount = useRef(nodeCount);
   const prevChat = useRef(totalChatLines);
+  const prevStage = useRef(stageIndex);
 
+  const negotiationFocus = useMemo(
+    () => [{ id: "negotiation" }, ...sellerIds.map((id) => ({ id }))],
+    [sellerIds],
+  );
+
+  // When negotiation starts, zoom in on negotiation + seller nodes
+  useEffect(() => {
+    if (stageIndex === 2 && prevStage.current !== 2) {
+      prevStage.current = stageIndex;
+      const t = setTimeout(
+        () => fitView({ nodes: negotiationFocus, padding: 0.2, duration: 700, minZoom: 0.5, maxZoom: 1.2 }),
+        150,
+      );
+      return () => clearTimeout(t);
+    }
+    prevStage.current = stageIndex;
+  }, [stageIndex, fitView, negotiationFocus]);
+
+  // New nodes appearing — fit all when pre-negotiation, stay focused when negotiating
   useEffect(() => {
     if (nodeCount !== prevCount.current) {
       prevCount.current = nodeCount;
+      if (stageIndex >= 2) {
+        const t = setTimeout(
+          () => fitView({ nodes: negotiationFocus, padding: 0.3, duration: 350, minZoom: 0.4, maxZoom: 1.0 }),
+          60,
+        );
+        return () => clearTimeout(t);
+      }
       const t = setTimeout(() => fitView({ padding: 0.1, duration: 350 }), 60);
       return () => clearTimeout(t);
     }
-  }, [nodeCount, fitView]);
+  }, [nodeCount, fitView, stageIndex, negotiationFocus]);
 
+  // Chat lines changing during negotiation — don't re-fit, stay put
   useEffect(() => {
     if (totalChatLines !== prevChat.current) {
       prevChat.current = totalChatLines;
-      const t = setTimeout(() => fitView({ padding: 0.1, duration: 400 }), 200);
-      return () => clearTimeout(t);
+      if (stageIndex < 2) {
+        const t = setTimeout(() => fitView({ padding: 0.1, duration: 400 }), 200);
+        return () => clearTimeout(t);
+      }
     }
-  }, [totalChatLines, fitView]);
+  }, [totalChatLines, fitView, stageIndex]);
 
   return null;
 }

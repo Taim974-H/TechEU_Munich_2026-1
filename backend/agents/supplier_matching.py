@@ -65,4 +65,4 @@ def match_suppliers(requirements: dict) -> list:
         })
 
     scored.sort(key=lambda x: x["match_score"], reverse=True)
-    return scored[:3]
+    return scored

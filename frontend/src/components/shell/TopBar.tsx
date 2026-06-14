@@ -6,7 +6,7 @@ interface Props {
 
 export function TopBar({ onLogout }: Props) {
   return (
-    <header className="sticky top-0 z-40 border-b border-border bg-bg/90 backdrop-blur-md">
+    <header className="sticky top-0 z-40 border-b border-border bg-bg/90 backdrop-blur-md shadow-[0_1px_8px_rgba(0,0,0,0.06)]">
       <div className="mx-auto flex h-14 max-w-[1400px] items-center justify-between px-6">
         <Wordmark />
         <div className="flex items-center gap-3">

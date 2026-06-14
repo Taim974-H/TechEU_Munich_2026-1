@@ -5,6 +5,7 @@ import { ChatCircle } from "@phosphor-icons/react";
 import { SectionHeader } from "@/components/primitives/SectionHeader";
 import { PioneerBadge, RiskPill } from "@/components/primitives/Badges";
 import type { ConversationLog, MatchedSupplier } from "@/lib/types";
+import { displayName } from "@/lib/api";
 
 interface Props {
   logs: ConversationLog[];
@@ -58,7 +59,7 @@ export function NegotiationThreads({
               } ${!hasLogs ? "opacity-50" : ""}`}
             >
               <span className="font-mono text-[10px]">α</span>
-              {s.seller_name}
+              {displayName(s.seller_name)}
             </button>
           );
         })}
@@ -86,7 +87,7 @@ function Bubble({ log }: { log: ConversationLog }) {
       <div className={`flex max-w-[78%] flex-col gap-1.5 ${isBuyer ? "items-end" : "items-start"}`}>
         <div className="flex items-center gap-2 text-[10.5px] text-text-3">
           <span className="font-medium uppercase tracking-wide">
-            {isBuyer ? "Buyer Agent" : log.seller_name ?? "Seller"}
+            {isBuyer ? "Buyer Agent" : displayName(log.seller_name ?? "Seller")}
           </span>
           <span>· round {log.round}</span>
         </div>

@@ -111,9 +111,14 @@ body {
 }
 
 /* Focus — visible, accessible */
-:where(button, a, input, textarea, select):focus-visible {
+:where(button, a, input, select):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* Request form textarea — no focus ring; the pill container provides visual context */
+textarea:focus-visible {
+  outline: none;
 }
 
 /* React Flow tweaks */

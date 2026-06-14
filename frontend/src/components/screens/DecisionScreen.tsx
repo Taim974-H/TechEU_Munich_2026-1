@@ -16,6 +16,7 @@ import {
 import { ValidationTable } from "@/components/sections/ValidationTable";
 import { SupplierGrid } from "@/components/sections/SupplierGrid";
 import { AuditSummary } from "@/components/sections/AuditSummary";
+import { getDealCardUrl } from "@/lib/api";
 import type { DemoResult } from "@/lib/types";
 
 const EASE_OUT = [0.23, 1, 0.32, 1] as const;
@@ -39,17 +40,24 @@ export function DecisionScreen({ result, decision, onDecide }: Props) {
 
       <AccordionSection title="Audit Summary" dotColor="bg-accent" defaultOpen>
         <div className="pt-4">
-          <AuditSummary summary={result.audit_summary} results={result.validation_results} />
+          <AuditSummary
+            summary={result.audit_summary}
+            results={result.validation_results}
+            demoResult={result}
+          />
         </div>
       </AccordionSection>
 
-      <AccordionSection title="Supplier Comparison" dotColor="bg-success">
+      <AccordionSection title="Supplier Comparison" dotColor="bg-success" defaultOpen>
         <div className="pt-4">
-          <SupplierGrid suppliers={result.matched_suppliers} />
+          <SupplierGrid
+            suppliers={result.matched_suppliers}
+            validationResults={result.validation_results}
+          />
         </div>
       </AccordionSection>
 
-      <AccordionSection title="Validation Results" dotColor="bg-warning">
+      <AccordionSection title="Validation Results" dotColor="bg-warning" defaultOpen>
         <div className="pt-4">
           <ValidationTable
             results={result.validation_results}
@@ -142,91 +150,105 @@ function RecommendationCard({
           </span>
         </div>
 
-        {/* Headline */}
-        <div className="flex flex-wrap items-baseline gap-3">
-          <h2 className="text-[28px] font-bold tracking-tight text-text-1 leading-tight">
-            {rec.recommended_seller}
-          </h2>
-          <span className="rounded-full bg-accent px-3 py-1 text-[13px] font-semibold text-white">
-            €{rec.price_eur}
-          </span>
-        </div>
-        <p className="mt-1 text-[15px] font-medium text-text-2">
-          {rec.recommended_product}
-        </p>
-
-        {/* Chips row */}
-        <div className="mt-4 flex flex-wrap gap-2">
-          <Chip icon={<Truck className="h-3.5 w-3.5" />} label={`${rec.delivery_days}d delivery`} />
-          <Chip
-            icon={<ShieldCheck className="h-3.5 w-3.5" />}
-            label={`${rec.warranty_years}yr warranty`}
-          />
-          <Chip
-            icon={<Gauge className="h-3.5 w-3.5" />}
-            label={
-              <span className={riskColor}>
-                {rec.risk_level} risk
+        {/* Two-column: info left, deal card right */}
+        <div className="flex gap-6">
+          {/* Left: all deal info + actions */}
+          <div className="flex flex-1 flex-col">
+            {/* Headline */}
+            <div className="flex flex-wrap items-baseline gap-3">
+              <h2 className="text-[28px] font-bold tracking-tight text-text-1 leading-tight">
+                {rec.recommended_seller}
+              </h2>
+              <span className="rounded-full bg-accent px-3 py-1 text-[13px] font-semibold text-white">
+                €{rec.price_eur}
               </span>
-            }
-          />
-        </div>
+            </div>
+            <p className="mt-1 text-[15px] font-medium text-text-2">
+              {rec.recommended_product}
+            </p>
 
-        {/* Reason */}
-        <p className="mt-4 max-w-[68ch] text-[13px] leading-relaxed text-text-2">
-          {rec.reason}
-        </p>
+            {/* Chips row */}
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Chip icon={<Truck className="h-3.5 w-3.5" />} label={`${rec.delivery_days}d delivery`} />
+              <Chip
+                icon={<ShieldCheck className="h-3.5 w-3.5" />}
+                label={`${rec.warranty_years}yr warranty`}
+              />
+              <Chip
+                icon={<Gauge className="h-3.5 w-3.5" />}
+                label={<span className={riskColor}>{rec.risk_level} risk</span>}
+              />
+            </div>
 
-        {/* Action area */}
-        <div className="relative mt-6">
-          {/* Confirmation banner — rendered under buttons, revealed by GSAP */}
-          <div
-            ref={confirmRef}
-            className={`absolute inset-0 flex items-center justify-center gap-3 rounded-xl px-5 py-3.5 opacity-0 ${
-              decision === "approved"
-                ? "bg-success-soft"
-                : decision === "rejected"
-                  ? "bg-danger-soft"
-                  : "bg-success-soft"
-            }`}
-          >
-            {decision === "approved" ? (
-              <>
-                <CheckCircle weight="fill" className="h-5 w-5 text-success" />
-                <span className="text-[14px] font-semibold text-success">
-                  Deal approved — order confirmed
-                </span>
-              </>
-            ) : (
-              <>
-                <XCircle weight="fill" className="h-5 w-5 text-danger" />
-                <span className="text-[14px] font-semibold text-danger">
-                  Deal rejected
-                </span>
-              </>
-            )}
+            {/* Reason */}
+            <p className="mt-4 text-[13px] leading-relaxed text-text-2">
+              {rec.reason}
+            </p>
+
+            {/* Action area */}
+            <div className="relative mt-6">
+              <div
+                ref={confirmRef}
+                className={`absolute inset-0 flex items-center justify-center gap-3 rounded-xl px-5 py-3.5 opacity-0 ${
+                  decision === "approved"
+                    ? "bg-success-soft"
+                    : decision === "rejected"
+                      ? "bg-danger-soft"
+                      : "bg-success-soft"
+                }`}
+              >
+                {decision === "approved" ? (
+                  <>
+                    <CheckCircle weight="fill" className="h-5 w-5 text-success" />
+                    <span className="text-[14px] font-semibold text-success">
+                      Deal approved — order confirmed
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <XCircle weight="fill" className="h-5 w-5 text-danger" />
+                    <span className="text-[14px] font-semibold text-danger">
+                      Deal rejected
+                    </span>
+                  </>
+                )}
+              </div>
+              <div
+                ref={buttonsRef}
+                className={`flex gap-3 ${decided ? "pointer-events-none invisible" : ""}`}
+              >
+                <button
+                  onClick={() => handleDecide("approved")}
+                  className="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-accent text-[14px] font-semibold text-white shadow-sm transition-all hover:brightness-95 active:scale-[0.97]"
+                >
+                  <CheckCircle weight="bold" className="h-4 w-4" />
+                  Approve Deal
+                </button>
+                <button
+                  onClick={() => handleDecide("rejected")}
+                  className="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl border border-red-200 bg-white text-[14px] font-semibold text-danger transition-all hover:bg-danger-soft active:scale-[0.97]"
+                >
+                  <XCircle weight="bold" className="h-4 w-4" />
+                  Reject
+                </button>
+              </div>
+            </div>
           </div>
 
-          {/* Buttons */}
-          <div
-            ref={buttonsRef}
-            className={`flex gap-3 ${decided ? "pointer-events-none invisible" : ""}`}
-          >
-            <button
-              onClick={() => handleDecide("approved")}
-              className="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-accent text-[14px] font-semibold text-white shadow-sm transition-all hover:brightness-95 active:scale-[0.97]"
-            >
-              <CheckCircle weight="bold" className="h-4 w-4" />
-              Approve Deal
-            </button>
-            <button
-              onClick={() => handleDecide("rejected")}
-              className="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl border border-red-200 bg-white text-[14px] font-semibold text-danger transition-all hover:bg-danger-soft active:scale-[0.97]"
-            >
-              <XCircle weight="bold" className="h-4 w-4" />
-              Reject
-            </button>
-          </div>
+          {/* Right: fal deal card image (always visible once decided) */}
+          {decided && (
+            <div className="hidden shrink-0 lg:flex lg:items-center w-48 xl:w-56">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={getDealCardUrl(result.session_id ?? undefined)}
+                alt="Procurement deal card generated by fal"
+                className="w-full rounded-lg object-contain border border-border"
+                onError={(e) => {
+                  (e.currentTarget as HTMLImageElement).parentElement!.style.display = "none";
+                }}
+              />
+            </div>
+          )}
         </div>
       </div>
     </div>

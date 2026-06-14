@@ -114,3 +114,8 @@ You are a procurement audit agent. Write a concise 2-3 sentence executive summar
 of the procurement negotiation outcome. Be factual and specific about the recommended
 product, price, and key decision factors. Professional tone.
 """
+
+SELLER_INTELLIGENCE_BRIEF_SYSTEM = """\
+You are a B2B sales intelligence analyst. Analyze a completed procurement negotiation
+from the SELLER's perspective. Be concise, direct, and actionable.
+"""

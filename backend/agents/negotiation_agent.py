@@ -134,6 +134,9 @@ def _generate_buyer_turn(
     guardrails = get_system_constraints(requirements)
     strategy_suffix = BUYER_STRATEGY_PROMPTS.get(strategy, BUYER_STRATEGY_PROMPTS["medium"])
     system = NEGOTIATION_BUYER_SYSTEM + "\n\n" + strategy_suffix + "\n\n" + guardrails
+    buyer_note = requirements.get("buyer_note", "")
+    if buyer_note:
+        system += f"\n\nBuyer adjustment context for this round: {buyer_note}"
 
     sub_ctx = "\n".join([
         f"- Price: {get_price_context(requirements, product, seller)}",

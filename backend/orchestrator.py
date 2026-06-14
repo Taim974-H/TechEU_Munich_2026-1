@@ -10,7 +10,7 @@ from backend.agents.procurement_intelligence import extract_requirements, valida
 from backend.agents.supplier_matching import match_suppliers
 from backend.agents.product_clustering import cluster_products
 from backend.agents.judging_agent import judge_candidate
-from backend.agents.negotiation_agent import negotiate_one_supplier
+from backend.agents.negotiation_agent import negotiate_one_supplier, _get_seller_best_product
 from backend.prompts import STRATEGY_OPTIONS
 from backend.agents.human_escalation import check_escalation
 from backend.agents.audit_summary import generate_summary
@@ -122,7 +122,9 @@ def run_demo_events(
         yield evt("match", "match", supplier)
 
     if len(matched_suppliers) < 2 and not demo_mode:
+        yield evt("tavily", "match", {"status": "searching", "message": "Tavily enriching supplier data…"})
         tavily_raw = search_external_supplier(structured_requirements)
+        yield evt("tavily", "match", {"status": "done", "triggered": True, "results_count": len(tavily_raw.get("results", []))})
     else:
         tavily_raw = fallback_tavily_result(structured_requirements) if demo_mode else {}
 
@@ -229,6 +231,7 @@ def run_demo_events(
     }
 
     # Pioneer labeling on seller turns (mutates logs in place for the done event)
+    yield evt("pioneer", "validate", {"status": "labeling", "message": "Pioneer classifying seller messages…"})
     pioneer_labels: list = []
     for log in conversation_logs:
         if log["speaker"] == "seller":
@@ -239,11 +242,28 @@ def run_demo_events(
             log["pioneer_labels"] = label_result.get("labels", [])
             log["risk_level"] = label_result.get("risk_level", log.get("risk_level", "unknown"))
             pioneer_labels.append(label_result)
+    yield evt("pioneer", "validate", {"status": "done", "labeled_count": len(pioneer_labels)})
 
     # ── Stage: validate ───────────────────────────────────────────────────────
-    validation_results = [validate_offer(structured_requirements, offer) for offer in raw_offers]
+    # Build a per-supplier offer map: prefer negotiated offer, fall back to best listed product
+    negotiated_by_seller = {o["seller_id"]: o for o in raw_offers}
+    all_offers_for_validation: list = []
+    for supplier in matched_suppliers:
+        sid = supplier["seller_id"]
+        if sid in negotiated_by_seller:
+            all_offers_for_validation.append(negotiated_by_seller[sid])
+        else:
+            best = _get_seller_best_product(sid, structured_requirements, inventory_flat)
+            if best:
+                all_offers_for_validation.append({
+                    **best,
+                    "seller_id": sid,
+                    "seller_name": supplier.get("seller_name", sid),
+                })
 
-    for offer, result in zip(raw_offers, validation_results):
+    validation_results = [validate_offer(structured_requirements, offer) for offer in all_offers_for_validation]
+
+    for offer, result in zip(all_offers_for_validation, validation_results):
         if result["status"] == "passed":
             result["score"] = compute_value_score(structured_requirements, offer)
         result["seller_name"] = offer.get("seller_name", offer.get("seller_id", ""))
@@ -270,23 +290,27 @@ def run_demo_events(
     escalation_result = check_escalation(validation_results, structured_requirements, best_offer)
 
     if escalation_result.get("escalate"):
-        alert_payload = {
-            "session_id": session_id,
-            "question": escalation_result.get("question_for_human", ""),
-            "trigger": escalation_result.get("trigger", ""),
-            "best_offer": (
-                {
-                    "seller_name": best_offer.get("seller_name", ""),
-                    "product": best_offer.get("product", ""),
-                    "price_eur": best_offer.get("price_eur", 0),
-                    "delivery_days": best_offer.get("delivery_days", 0),
-                }
-                if best_offer
-                else None
-            ),
-            "budget_eur": structured_requirements.get("budget_eur", 0),
-        }
-        yield evt("human_alert", "escalate", alert_payload)
+        def _make_alert_payload(renegotiate_used: bool) -> dict:
+            return {
+                "session_id": session_id,
+                "question": escalation_result.get("question_for_human", ""),
+                "trigger": escalation_result.get("trigger", ""),
+                "best_offer": (
+                    {
+                        "seller_name": best_offer.get("seller_name", ""),
+                        "product": best_offer.get("product", ""),
+                        "price_eur": best_offer.get("price_eur", 0),
+                        "delivery_days": best_offer.get("delivery_days", 0),
+                    }
+                    if best_offer
+                    else None
+                ),
+                "budget_eur": structured_requirements.get("budget_eur", 0),
+                "has_winning_offer": best_offer is not None,
+                "renegotiate_used": renegotiate_used,
+            }
+
+        yield evt("human_alert", "escalate", _make_alert_payload(False))
         if wait_for_human is not None:
             human_response = wait_for_human(session_id, escalation_result)
         else:
@@ -294,6 +318,101 @@ def run_demo_events(
                 "action": "auto_continue",
                 "note": "Non-streaming run auto-continued after escalation alert.",
             }
+
+        if human_response.get("action") == "renegotiate" and best_offer is not None:
+            # ── Re-negotiation with winning supplier ──────────────────────────
+            note = human_response.get("note", "")
+            structured_requirements["buyer_note"] = note
+
+            winning_sid = best_offer.get("seller_id", "")
+            winning_supplier = next(
+                (s for s in matched_suppliers if s["seller_id"] == winning_sid),
+                matched_suppliers[0] if matched_suppliers else None,
+            )
+
+            if winning_supplier:
+                yield evt("negotiation_turn", "negotiate", {
+                    "seller_id": winning_supplier["seller_id"],
+                    "seller_name": winning_supplier["seller_name"],
+                    "speaker": "system",
+                    "message": (
+                        f"Re-opening negotiation with {winning_supplier['seller_name']} — "
+                        f"buyer adjustment received."
+                    ),
+                    "round": 0,
+                    "event_kind": "renegotiation_start",
+                    "pioneer_labels": [],
+                    "risk_level": "low",
+                    "extracted_fields": {},
+                })
+
+                for log, offer in negotiate_one_supplier(
+                    structured_requirements, winning_supplier, inventory_flat, judged_candidates
+                ):
+                    conversation_logs.append(log)
+                    yield evt("negotiation_turn", "negotiate", dict(log))
+                    if offer is not None:
+                        raw_offers = [o for o in raw_offers if o["seller_id"] != winning_sid]
+                        raw_offers.append(offer)
+                        winning_offer = offer
+                        best_offer = offer
+
+            # ── Re-validate after re-negotiation ─────────────────────────────
+            negotiated_by_seller = {o["seller_id"]: o for o in raw_offers}
+            all_offers_for_revalidation: list = []
+            for supplier in matched_suppliers:
+                sid = supplier["seller_id"]
+                if sid in negotiated_by_seller:
+                    all_offers_for_revalidation.append(negotiated_by_seller[sid])
+                else:
+                    best_p = _get_seller_best_product(sid, structured_requirements, inventory_flat)
+                    if best_p:
+                        all_offers_for_revalidation.append({
+                            **best_p,
+                            "seller_id": sid,
+                            "seller_name": supplier.get("seller_name", sid),
+                        })
+
+            validation_results = [validate_offer(structured_requirements, offer) for offer in all_offers_for_revalidation]
+            for offer, result in zip(all_offers_for_revalidation, validation_results):
+                if result["status"] == "passed":
+                    result["score"] = compute_value_score(structured_requirements, offer)
+                result["seller_name"] = offer.get("seller_name", offer.get("seller_id", ""))
+                result["product"] = offer.get("product", "")
+                result["length_mm"] = offer.get("length_mm", 0)
+                result["power_watts"] = offer.get("power_watts", 0)
+                result["price_eur"] = offer.get("price_eur", 0)
+                result["delivery_days"] = offer.get("delivery_days", 0)
+                result["warranty_years"] = offer.get("warranty_years", 0)
+                result["extra_fields"] = {
+                    c["field"]: offer.get(c["field"])
+                    for c in structured_requirements.get("extra_constraints", [])
+                    if c.get("field")
+                }
+                yield evt("validation", "validate", dict(result))
+
+            # Recompute best after re-validation
+            passed = [v for v in validation_results if v["status"] == "passed"]
+            best = max(passed, key=lambda v: v.get("score", 0)) if passed else None
+            best_offer = next(
+                (o for o in raw_offers if best and o["seller_id"] == best["seller_id"]),
+                best_offer,
+            )
+
+            # Second escalation check — renegotiate option disabled
+            escalation_result = check_escalation(validation_results, structured_requirements, best_offer)
+            if escalation_result.get("escalate"):
+                yield evt("human_alert", "escalate", _make_alert_payload(True))
+                if wait_for_human is not None:
+                    human_response = wait_for_human(session_id, escalation_result)
+                else:
+                    human_response = {
+                        "action": "auto_continue",
+                        "note": "Non-streaming run auto-continued after second escalation alert.",
+                    }
+            else:
+                human_response = {"action": "auto_approved", "note": "No escalation needed after re-negotiation."}
+
         escalation_result["human_response"] = human_response
         escalation_result["human_decision"] = human_response.get("action")
         yield evt("escalation", "escalate", escalation_result)
@@ -357,10 +476,12 @@ def run_demo_events(
     yield evt("audit", "audit", {"text": audit_summary})
 
     # ── Done ──────────────────────────────────────────────────────────────────
+    yield evt("fal", "done", {"status": "generating", "message": "fal generating deal card…"})
     if demo_mode:
         deal_card_path = fallback_deal_card_path()
     else:
         deal_card_path = generate_deal_card(final_recommendation)
+    yield evt("fal", "done", {"status": "done", "path": deal_card_path})
 
     tavily_enrichment = _adapt_tavily(tavily_raw)
 

@@ -2,7 +2,7 @@
   "merchants": [
     {
       "seller_id": "vendor_a",
-      "seller_name": "Vendor A (CompuTech Distribution)",
+      "seller_name": "CompuTech Distribution",
       "inventories": [
         {
           "inventory_id": "vendor_a-main",
@@ -64,7 +64,7 @@
     },
     {
       "seller_id": "vendor_b",
-      "seller_name": "Vendor B (Workstation Parts GmbH)",
+      "seller_name": "Workstation Parts GmbH",
       "inventories": [
         {
           "inventory_id": "vendor_b-main",
@@ -126,7 +126,7 @@
     },
     {
       "seller_id": "vendor_c",
-      "seller_name": "Vendor C (RapidShip Components)",
+      "seller_name": "RapidShip Components",
       "inventories": [
         {
           "inventory_id": "vendor_c-main",
@@ -188,7 +188,7 @@
     },
     {
       "seller_id": "vendor_d",
-      "seller_name": "Vendor D (BudgetGPU Direct)",
+      "seller_name": "BudgetGPU Direct",
       "inventories": [
         {
           "inventory_id": "vendor_d-main",
@@ -250,7 +250,7 @@
     },
     {
       "seller_id": "vendor_e",
-      "seller_name": "Vendor E (Enterprise Compute Solutions)",
+      "seller_name": "Enterprise Compute Solutions",
       "inventories": [
         {
           "inventory_id": "vendor_e-main",
@@ -312,7 +312,7 @@
     },
     {
       "seller_id": "vendor_f",
-      "seller_name": "Vendor F (OfficeSupply Pro)",
+      "seller_name": "OfficeSupply Pro",
       "inventories": [
         {
           "inventory_id": "vendor_f-main",
@@ -374,7 +374,7 @@
     },
     {
       "seller_id": "vendor_g",
-      "seller_name": "Vendor G (SensorTech Europe)",
+      "seller_name": "SensorTech Europe",
       "inventories": [
         {
           "inventory_id": "vendor_g-main",

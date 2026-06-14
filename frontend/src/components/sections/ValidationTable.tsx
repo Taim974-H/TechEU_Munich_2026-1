@@ -6,6 +6,7 @@ import { useState } from "react";
 import { SectionHeader } from "@/components/primitives/SectionHeader";
 import { StatusBadge } from "@/components/primitives/Badges";
 import type { StructuredRequirements, ValidationResult } from "@/lib/types";
+import { displayName } from "@/lib/api";
 
 interface Props {
   results: ValidationResult[];
@@ -103,7 +104,7 @@ function Row({
         }`}
         onClick={canExpand ? onToggle : undefined}
       >
-        <td className="py-3 pr-4 font-medium text-text-1">{r.seller_name}</td>
+        <td className="py-3 pr-4 font-medium text-text-1">{displayName(r.seller_name)}</td>
         <td className="py-3 pr-4 text-text-2">{r.product}</td>
         <Spec value={`${r.length_mm}mm`} fail={r.length_mm > requirements.max_length_mm} />
         <Spec value={`${r.power_watts}W`} fail={r.power_watts > requirements.max_power_watts} />

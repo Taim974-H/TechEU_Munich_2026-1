@@ -1,7 +1,7 @@
 [
   {
     "seller_id": "vendor_a",
-    "seller_name": "Vendor A (CompuTech Distribution)",
+    "seller_name": "CompuTech Distribution",
     "specialization": "high-performance GPUs",
     "region": "Germany",
     "reliability_score": 0.74,
@@ -15,7 +15,7 @@
   },
   {
     "seller_id": "vendor_b",
-    "seller_name": "Vendor B (Workstation Parts GmbH)",
+    "seller_name": "Workstation Parts GmbH",
     "specialization": "workstation components",
     "region": "Germany",
     "reliability_score": 0.88,
@@ -29,7 +29,7 @@
   },
   {
     "seller_id": "vendor_c",
-    "seller_name": "Vendor C (RapidShip Components)",
+    "seller_name": "RapidShip Components",
     "specialization": "fast logistics electronics",
     "region": "Netherlands",
     "reliability_score": 0.81,
@@ -43,7 +43,7 @@
   },
   {
     "seller_id": "vendor_d",
-    "seller_name": "Vendor D (BudgetGPU Direct)",
+    "seller_name": "BudgetGPU Direct",
     "specialization": "budget consumer electronics",
     "region": "Poland",
     "reliability_score": 0.62,
@@ -57,7 +57,7 @@
   },
   {
     "seller_id": "vendor_e",
-    "seller_name": "Vendor E (Enterprise Compute Solutions)",
+    "seller_name": "Enterprise Compute Solutions",
     "specialization": "enterprise AI hardware",
     "region": "Switzerland",
     "reliability_score": 0.93,
@@ -71,7 +71,7 @@
   },
   {
     "seller_id": "vendor_f",
-    "seller_name": "Vendor F (OfficeSupply Pro)",
+    "seller_name": "OfficeSupply Pro",
     "specialization": "ergonomic office furniture",
     "region": "Germany",
     "reliability_score": 0.85,
@@ -85,7 +85,7 @@
   },
   {
     "seller_id": "vendor_g",
-    "seller_name": "Vendor G (SensorTech Europe)",
+    "seller_name": "SensorTech Europe",
     "specialization": "industrial sensors and detection systems",
     "region": "Germany",
     "reliability_score": 0.82,

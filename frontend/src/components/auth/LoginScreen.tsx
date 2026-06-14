@@ -21,7 +21,7 @@ const DEMO_USERS: Record<string, AuthSession & { password: string }> = {
     username: "buyer",
     password: "123",
     role: "buyer",
-    displayName: "NovaCompute GmbH",
+    displayName: "Horizon Analytics GmbH",
   },
   seller: {
     username: "seller",

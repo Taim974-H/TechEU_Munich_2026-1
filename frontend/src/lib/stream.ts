@@ -7,15 +7,17 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
  * every event envelope. Returns a cleanup function that closes the stream.
  */
 export function streamDemo(
-  request: Omit<BuyerRequest, "request_id"> & { request_id?: string },
+  request: { raw_request: string; region: string; request_id?: string; priority?: string },
   onEvent: (event: StreamEvent) => void,
   onError?: (error: Event) => void,
 ): () => void {
   const params = new URLSearchParams({
     raw_request: request.raw_request,
     region: request.region,
-    priority: request.priority,
   });
+  if (request.priority) {
+    params.set("priority", request.priority);
+  }
   if (request.request_id) {
     params.set("request_id", request.request_id);
   }
@@ -63,16 +65,16 @@ export async function sendStrategyChoice(
 
 export async function sendHumanResponse(
   sessionId: string,
-  decision: HumanResponseDecision,
-  adjustedBudgetEur?: number,
+  action: HumanResponseDecision | "renegotiate",
+  note?: string,
 ): Promise<void> {
   const res = await fetch(`${API_BASE}/api/human-response`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       session_id: sessionId,
-      decision,
-      adjusted_budget_eur: adjustedBudgetEur ?? null,
+      action,
+      note: note ?? null,
     }),
   });
   if (!res.ok) {

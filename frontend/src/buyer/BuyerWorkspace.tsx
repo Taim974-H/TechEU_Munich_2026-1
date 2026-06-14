@@ -16,7 +16,6 @@ import { AgentNetwork } from "@/components/hero/AgentNetwork";
 import { RequestForm } from "@/components/input/RequestForm";
 import { ActivityFeed, type FeedItem } from "@/components/feed/ActivityFeed";
 import { EscalationModal } from "@/components/modals/EscalationModal";
-import { StrategyModal } from "@/components/modals/StrategyModal";
 import { DecisionScreen } from "@/components/screens/DecisionScreen";
 import {
   initialStatus,
@@ -26,13 +25,15 @@ import {
   type SectionId,
 } from "@/lib/demoMachine";
 import { streamDemo, sendStrategyChoice, sendHumanResponse } from "@/lib/stream";
+import { displayName } from "@/lib/api";
 import type {
   ConversationLog,
   DemoResult,
   EscalationResult,
   HumanAlertData,
+  JudgedCandidate,
+  MatchedSupplier,
   NegotiationStrategy,
-  StrategyOption,
   StreamEvent,
 } from "@/lib/types";
 
@@ -41,7 +42,7 @@ interface BuyerWorkspaceProps {
   accountLabel?: string;
 }
 
-export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: BuyerWorkspaceProps) {
+export function BuyerWorkspace({ onLogout, accountLabel = "Horizon Analytics GmbH" }: BuyerWorkspaceProps) {
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [status, setStatus] = useState<DemoStatus>(() => ({
     ...initialStatus,
@@ -55,15 +56,18 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
   const [error, setError] = useState<string | null>(null);
 
   // Streaming-specific state
-  const [strategyAlert, setStrategyAlert] = useState<{ session_id: string; options: StrategyOption[] } | null>(null);
   const [escalationAlert, setEscalationAlert] = useState<EscalationResult | null>(null);
 
   // Dynamic node visibility driven by real events
   const [visibleNodeIds, setVisibleNodeIds] = useState<Set<string>>(new Set());
   const [nodeChatLines, setNodeChatLines] = useState<Record<string, ConversationLog[]>>({});
+  // Live supplier/candidate lists built as stream events arrive (not waiting for done)
+  const [liveSuppliers, setLiveSuppliers] = useState<MatchedSupplier[]>([]);
+  const [liveJudgedCandidates, setLiveJudgedCandidates] = useState<JudgedCandidate[]>([]);
 
   const sessionIdRef = useRef<string | null>(null);
   const streamCleanupRef = useRef<(() => void) | null>(null);
+  const chosenStrategyRef = useRef<NegotiationStrategy>("medium");
   const stepRef = useRef<HTMLDivElement>(null);
 
   // GSAP curtain-wipe between steps
@@ -106,7 +110,6 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
     setRequestLabel("");
     setVisibleNodeIds(new Set());
     setNodeChatLines({});
-    setStrategyAlert(null);
     setEscalationAlert(null);
   }, []);
 
@@ -154,37 +157,47 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
 
       case "cluster": {
         const d = event.data as Record<string, unknown>;
-        const jc = d.judged_candidate as Record<string, unknown> | undefined;
+        const jc = d.judged_candidate as JudgedCandidate | undefined;
         setStatus((s) => ({ ...s, stageIndex: Math.max(s.stageIndex, 1) }));
         setVisibleNodeIds((prev) => new Set([...prev, "clustering", "judging"]));
+        if (jc) {
+          setLiveJudgedCandidates((prev) => {
+            const exists = prev.some((c) => c.cluster_id === jc.cluster_id);
+            return exists ? prev : [...prev, jc];
+          });
+        }
         pushFeed({
           id: `cluster-${d.cluster_id ?? Date.now()}`,
           agent: "cluster",
           title: `Cluster ${d.cluster_id as string} · ${(d.products as unknown[])?.length ?? 0} products`,
-          detail: jc ? `Verdict: ${jc.verdict as string} · ${jc.reason as string}` : undefined,
+          detail: jc ? `Verdict: ${jc.verdict} · ${jc.reason}` : undefined,
         });
         if (jc) {
           pushFeed({
             id: `judge-${d.cluster_id ?? Date.now()}`,
             agent: "judging",
-            title: `${jc.verdict as string} (score ${jc.score as number})`,
-            detail: jc.reason as string,
+            title: `${jc.verdict} (score ${jc.score})`,
+            detail: jc.reason,
           });
         }
         break;
       }
 
       case "match": {
-        const d = event.data as Record<string, unknown>;
+        const d = event.data as MatchedSupplier;
         setStatus((s) => ({ ...s, stageIndex: Math.max(s.stageIndex, 1) }));
         reveal(STAGE_REVEALS["match"]);
-        setVisibleNodeIds((prev) => new Set([...prev, "orchestrator", "matching", d.seller_id as string]));
+        setVisibleNodeIds((prev) => new Set([...prev, "orchestrator", "matching", d.seller_id]));
+        setLiveSuppliers((prev) => {
+          const exists = prev.some((s) => s.seller_id === d.seller_id);
+          return exists ? prev : [...prev, d];
+        });
         pushFeed({
-          id: `match-${d.seller_id as string}`,
+          id: `match-${d.seller_id}`,
           agent: "orchestrator",
-          vendor: d.seller_name as string,
-          title: `Supplier matched — score ${((d.match_score as number) * 100).toFixed(0)}%`,
-          detail: d.reason as string,
+          vendor: displayName(d.seller_name),
+          title: `Supplier matched — score ${(d.match_score * 100).toFixed(0)}%`,
+          detail: d.reason,
         });
         break;
       }
@@ -205,7 +218,7 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
           pushFeed({
             id: `fallback-${Date.now()}`,
             agent: "escalation",
-            vendor: log.seller_name,
+            vendor: displayName(log.seller_name),
             title: log.message,
             variant: "fallback",
           });
@@ -216,9 +229,18 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
           pushFeed({
             id: `reject-${log.seller_id}-${Date.now()}`,
             agent: "seller",
-            vendor: log.seller_name,
+            vendor: displayName(log.seller_name),
             title: `Rejected — ${log.message.slice(0, 80)}${log.message.length > 80 ? "…" : ""}`,
             variant: "rejection",
+          });
+          break;
+        }
+
+        if (log.event_kind === "renegotiation_start") {
+          pushFeed({
+            id: `renegotiate-${Date.now()}`,
+            agent: "orchestrator",
+            title: log.message,
           });
           break;
         }
@@ -232,6 +254,10 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
         setVisibleNodeIds((prev) => {
           const next = new Set(prev);
           next.add("negotiation");
+          next.add("sub-price");
+          next.add("sub-delivery");
+          next.add("sub-warranty");
+          next.add("sub-risk");
           if (log.seller_id) next.add(log.seller_id);
           return next;
         });
@@ -244,7 +270,7 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
         pushFeed({
           id: `chat-${log.seller_id}-r${log.round}-${log.speaker}-${Date.now()}`,
           agent: log.speaker === "buyer" ? "buyer" : "seller",
-          vendor: log.seller_name,
+          vendor: displayName(log.seller_name),
           title: `"${log.message.length > 90 ? log.message.slice(0, 90) + "…" : log.message}"`,
           detail: `Round ${log.round}`,
         });
@@ -258,7 +284,7 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
         pushFeed({
           id: `val-${d.seller_id as string}-${Date.now()}`,
           agent: "validation",
-          vendor: d.seller_name as string,
+          vendor: displayName(d.seller_name as string),
           title: (d.status as string).toUpperCase(),
           detail: (d.failed_constraints as string[])?.join(" · ") || "all constraints satisfied",
         });
@@ -268,15 +294,16 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
       case "human_alert": {
         const d = event.data as HumanAlertData;
         if (d.trigger === "strategy_selection") {
-          setStrategyAlert({
-            session_id: d.session_id,
-            options: d.strategy_options ?? [],
-          });
+          // Auto-respond with the strategy chosen upfront — no modal
+          const strategy = chosenStrategyRef.current;
+          const sid = d.session_id ?? sessionIdRef.current;
+          if (sid) {
+            sendStrategyChoice(sid, strategy).catch(() => {});
+          }
           pushFeed({
             id: `strategy-alert-${Date.now()}`,
             agent: "strategy",
-            title: "Strategy selection required",
-            detail: "Waiting for user input…",
+            title: `Strategy: ${strategy} (pre-selected)`,
           });
         } else {
           // Escalation / approval alert
@@ -285,6 +312,8 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
             trigger: d.trigger,
             reason: d.question ?? "",
             question_for_human: d.question ?? "",
+            renegotiate_used: d.renegotiate_used,
+            has_winning_offer: d.has_winning_offer,
           };
           setEscalationAlert(escalation);
           setStatus((s) => ({ ...s, phase: "awaiting_approval", stageIndex: Math.max(s.stageIndex, 4) }));
@@ -326,12 +355,50 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
       }
 
       case "audit": {
+        setVisibleNodeIds((prev) => new Set([...prev, "audit"]));
         pushFeed({
           id: `audit-${Date.now()}`,
           agent: "audit",
           title: "Audit summary ready",
           detail: ((event.data as Record<string, unknown>).text as string)?.slice(0, 80),
         });
+        setVisibleNodeIds((prev) => new Set([...prev, "audit-done"]));
+        break;
+      }
+
+      case "pioneer": {
+        const d = event.data as Record<string, unknown>;
+        if (d.status === "labeling") {
+          setVisibleNodeIds((prev) => new Set([...prev, "pioneer"]));
+          pushFeed({ id: `pioneer-${Date.now()}`, agent: "validation", title: "Pioneer classifying seller messages…" });
+        } else {
+          setVisibleNodeIds((prev) => new Set([...prev, "pioneer-done"]));
+          pushFeed({ id: `pioneer-done-${Date.now()}`, agent: "validation", title: `Pioneer labeled ${(d.labeled_count as number) ?? 0} turn(s)` });
+        }
+        break;
+      }
+
+      case "tavily": {
+        const d = event.data as Record<string, unknown>;
+        if (d.status === "searching") {
+          setVisibleNodeIds((prev) => new Set([...prev, "tavily"]));
+          pushFeed({ id: `tavily-${Date.now()}`, agent: "orchestrator", title: "Tavily searching for supplier data…" });
+        } else {
+          setVisibleNodeIds((prev) => new Set([...prev, "tavily-done"]));
+          pushFeed({ id: `tavily-done-${Date.now()}`, agent: "orchestrator", title: `Tavily found ${(d.results_count as number) ?? 0} external result(s)` });
+        }
+        break;
+      }
+
+      case "fal": {
+        const d = event.data as Record<string, unknown>;
+        if (d.status === "generating") {
+          setVisibleNodeIds((prev) => new Set([...prev, "fal"]));
+          pushFeed({ id: `fal-${Date.now()}`, agent: "orchestrator", title: "fal generating deal card image…" });
+        } else {
+          setVisibleNodeIds((prev) => new Set([...prev, "fal-done"]));
+          pushFeed({ id: `fal-done-${Date.now()}`, agent: "orchestrator", title: "Deal card generated" });
+        }
         break;
       }
 
@@ -365,7 +432,10 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
   }, [pushFeed, reveal]);
 
   const start = useCallback(
-    (req: { raw_request: string; region: string; priority: string }) => {
+    (req: { raw_request: string; region: string; strategy: NegotiationStrategy }) => {
+      // Store strategy for auto-responding to the HITL pause
+      chosenStrategyRef.current = req.strategy;
+
       // Close any existing stream
       streamCleanupRef.current?.();
       sessionIdRef.current = null;
@@ -377,7 +447,8 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
       setActiveSeller("");
       setVisibleNodeIds(new Set(["request", "orchestrator"]));
       setNodeChatLines({});
-      setStrategyAlert(null);
+      setLiveSuppliers([]);
+      setLiveJudgedCandidates([]);
       setEscalationAlert(null);
 
       // Immediate label from the raw request; refined once `requirements` arrives
@@ -401,7 +472,6 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
   );
 
   const handleStrategyChoice = useCallback(async (strategy: NegotiationStrategy) => {
-    setStrategyAlert(null);
     const sid = sessionIdRef.current;
     if (!sid) return;
     try {
@@ -411,7 +481,25 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
     }
   }, []);
 
-  const handleDecide = useCallback(async (d: "approved" | "rejected") => {
+  const handleDecide = useCallback(async (d: "approved" | "rejected" | "renegotiate" | "restart", note?: string) => {
+    if (d === "restart") {
+      setEscalationAlert(null);
+      reset();
+      return;
+    }
+    if (d === "renegotiate") {
+      setEscalationAlert(null);
+      setStatus((s) => ({ ...s, phase: "running" }));
+      const sid = sessionIdRef.current;
+      if (sid) {
+        try {
+          await sendHumanResponse(sid, "renegotiate", note);
+        } catch {
+          // non-fatal
+        }
+      }
+      return;
+    }
     setDecision(d);
     setEscalationAlert(null);
     setStatus((s) => ({ ...s, phase: d === "approved" ? "approved" : "rejected" }));
@@ -423,7 +511,7 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
         // non-fatal
       }
     }
-  }, []);
+  }, [reset]);
 
   const showSection = (id: SectionId) => status.revealedSections.has(id);
   const isIdle = status.phase === "idle";
@@ -545,11 +633,11 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
                 activeSeller={activeSeller}
                 onSelectSeller={setActiveSeller}
                 canInteract={showSection("negotiation")}
-                suppliers={result?.matched_suppliers ?? []}
+                suppliers={result?.matched_suppliers ?? liveSuppliers}
                 visibleNodeIds={visibleNodeIds}
                 chatLines={nodeChatLines}
                 requestLabel={requestLabel}
-                judgedCandidates={result?.judged_candidates ?? []}
+                judgedCandidates={result?.judged_candidates ?? liveJudgedCandidates}
               />
             </div>
 
@@ -560,19 +648,11 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
             </div>
           </div>
 
-          {/* Strategy selection modal — pauses stream for user input */}
-          {strategyAlert && (
-            <StrategyModal
-              options={strategyAlert.options}
-              onChoose={handleStrategyChoice}
-            />
-          )}
-
           {/* Escalation modal — shown on approval_required alert */}
           {escalationAlert && decision === null && (
             <EscalationModal
               data={escalationAlert}
-              onDecide={handleDecide}
+              onDecide={(d, note) => handleDecide(d, note)}
             />
           )}
 
@@ -597,9 +677,7 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
                   ? "● Processing…"
                   : status.phase === "awaiting_approval"
                     ? "⚠ Awaiting decision"
-                    : strategyAlert
-                      ? "⚙ Strategy selection required"
-                      : "Standby"}
+                    : "Standby"}
               </span>
             )}
           </div>
@@ -630,7 +708,7 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
                 <DecisionScreen
                   result={result}
                   decision={decision}
-                  onDecide={handleDecide}
+                  onDecide={(d) => handleDecide(d)}
                   activeSeller={activeSeller}
                   onSelectSeller={setActiveSeller}
                 />

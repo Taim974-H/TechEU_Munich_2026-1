@@ -11,8 +11,18 @@ import {
   WarningCircle,
   X,
 } from "@phosphor-icons/react";
-import { getInventory } from "@/lib/api";
+import {
+  Bar,
+  BarChart,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { supabase } from "@/lib/supabase";
+import { displayName } from "@/lib/api";
 import type {
   ConversationLog,
   DemoResult,
@@ -69,8 +79,13 @@ export function SellerWorkspace({ onLogout, accountLabel = "Vendor Console" }: S
   const [liveLogs, setLiveLogs] = useState<ConversationLog[]>([]);
   const [liveValidations, setLiveValidations] = useState<ValidationResult[]>([]);
   const [activeSellerId, setActiveSellerId] = useState("");
+  const [expandedSellerId, setExpandedSellerId] = useState("");
+  const [centerView, setCenterView] = useState<"dashboard" | "negotiations">("dashboard");
   const [inventoryBySeller, setInventoryBySeller] = useState<Record<string, SellerInventoryProduct[]>>({});
   const [showAddModal, setShowAddModal] = useState(false);
+  const [demoResult, setDemoResult] = useState<DemoResult | null>(null);
+  const [aiBrief, setAiBrief] = useState<string | null>(null);
+  const [briefLoading, setBriefLoading] = useState(false);
 
   // Fetch real inventory from backend on mount
   useEffect(() => {
@@ -103,37 +118,108 @@ export function SellerWorkspace({ onLogout, accountLabel = "Vendor Console" }: S
       .catch(() => {});
   }, []);
 
-  // Supabase Realtime: seed from most recent run, then subscribe for live updates
+  // Supabase Realtime: seed from most recent run, then subscribe for live updates.
+  // Falls back to /api/latest-session polling when Supabase env vars are not configured.
   useEffect(() => {
-    if (!supabase) return;
+    const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
     const applyResult = (result: DemoResult) => {
+      setDemoResult(result);
       const newSuppliers = result.matched_suppliers ?? [];
       setSuppliers(newSuppliers);
       setLiveLogs(result.conversation_logs ?? []);
       setLiveValidations(result.validation_results ?? []);
       const firstId = newSuppliers[0]?.seller_id ?? "";
       setActiveSellerId((prev) => prev || firstId);
+      setExpandedSellerId((prev) => prev || firstId);
     };
 
-    supabase
-      .from("demo_sessions")
-      .select("result")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .then(({ data }) => {
-        if (data?.[0]?.result) applyResult(data[0].result as DemoResult);
-      });
+    if (supabase) {
+      supabase
+        .from("demo_sessions")
+        .select("result")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .then(({ data }) => {
+          if (data?.[0]?.result) applyResult(data[0].result as DemoResult);
+        });
 
-    const channel = supabase
-      .channel("demo_sessions_changes")
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "demo_sessions" }, (payload) => {
-        applyResult((payload.new as { result: DemoResult }).result);
-      })
-      .subscribe();
+      const channel = supabase
+        .channel("demo_sessions_changes")
+        .on("postgres_changes", { event: "INSERT", schema: "public", table: "demo_sessions" }, (payload) => {
+          applyResult((payload.new as { result: DemoResult }).result);
+        })
+        .subscribe();
 
-    return () => { supabase?.removeChannel(channel); };
+      return () => { supabase?.removeChannel(channel); };
+    }
+
+    // Supabase not configured — seed from backend memory and poll for updates
+    const fetchLatest = () =>
+      fetch(`${API}/api/latest-session`)
+        .then((r) => r.ok ? r.json() : null)
+        .then((data) => { if (data) applyResult(data as DemoResult); })
+        .catch(() => {});
+
+    fetchLatest();
+    const interval = setInterval(fetchLatest, 3000);
+    return () => clearInterval(interval);
   }, []);
+
+  // Auto-fetch Gemini seller brief whenever a new demo result arrives
+  useEffect(() => {
+    if (!demoResult) return;
+    const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+    setBriefLoading(true);
+    setAiBrief(null);
+    fetch(`${API}/api/negotiation-insight`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        conversation_logs: demoResult.conversation_logs,
+        matched_suppliers: demoResult.matched_suppliers,
+        validation_results: demoResult.validation_results,
+        final_recommendation: demoResult.final_recommendation,
+        negotiation_outcome: demoResult.negotiation_outcome,
+        structured_requirements: demoResult.structured_requirements,
+      }),
+    })
+      .then((r) => r.json())
+      .then((d: { brief?: string }) => setAiBrief(d.brief ?? null))
+      .catch(() => {})
+      .finally(() => setBriefLoading(false));
+  }, [demoResult]);
+
+  // Key metrics derived from the latest result
+  const metrics = useMemo(() => {
+    if (!demoResult) return null;
+    const rec = demoResult.final_recommendation;
+    const outcome = demoResult.negotiation_outcome;
+    const budget = demoResult.structured_requirements?.budget_eur ?? 0;
+    const finalPrice = rec?.price_eur ?? 0;
+    const discount = budget && finalPrice ? Math.round(((budget - finalPrice) / budget) * 100) : 0;
+    const allRounds = liveLogs.length ? Math.max(...liveLogs.map((l) => l.round)) : 0;
+    return { outcome, rec, budget, finalPrice, discount, allRounds };
+  }, [demoResult, liveLogs]);
+
+  // Price progression per round for the active seller
+  const priceData = useMemo(() => {
+    const sellerLogs = liveLogs.filter(
+      (l) => l.seller_id === activeSellerId && l.extracted_fields?.price_eur
+    );
+    return sellerLogs.map((l) => ({
+      round: l.round,
+      price: l.extracted_fields!.price_eur as number,
+    }));
+  }, [liveLogs, activeSellerId]);
+
+  // Supplier match scores for bar chart
+  const supplierChartData = useMemo(() =>
+    suppliers.map((s) => ({
+      name: displayName(s.seller_name),
+      score: Math.round(s.match_score * 100),
+    })),
+  [suppliers]);
 
   const activeSeller = suppliers.find((s) => s.seller_id === activeSellerId) ?? suppliers[0];
   const activeProducts = inventoryBySeller[activeSellerId] ?? [];
@@ -155,10 +241,11 @@ export function SellerWorkspace({ onLogout, accountLabel = "Vendor Console" }: S
     return [{ sellerId: activeSellerId, seller, logs, lastMsg: logs[logs.length - 1], roundCount, validation }];
   }, [negotiations, activeSellerId, suppliers, liveValidations]);
 
-  const totalProducts = Object.values(inventoryBySeller).flat().length;
+  const totalProducts = suppliers.reduce((sum, s) => sum + (inventoryBySeller[s.seller_id]?.length ?? 0), 0);
 
   const selectSeller = (id: string) => {
     setActiveSellerId(id);
+    setExpandedSellerId((prev) => (prev === id ? "" : id));
   };
 
   const addProduct = (p: SellerInventoryProduct) => {
@@ -221,8 +308,9 @@ export function SellerWorkspace({ onLogout, accountLabel = "Vendor Console" }: S
           <div className="flex-1 overflow-y-auto space-y-2 px-3 pb-3">
             {suppliers.map((seller) => {
               const active = seller.seller_id === activeSellerId;
+              const expanded = seller.seller_id === expandedSellerId;
               const palette = avatarPalette(seller.seller_id, suppliers);
-              const initial = seller.seller_name.trim()[0]?.toUpperCase() ?? "?";
+              const initial = displayName(seller.seller_name).trim()[0]?.toUpperCase() ?? "?";
               const products = inventoryBySeller[seller.seller_id] ?? [];
 
               return (
@@ -257,7 +345,7 @@ export function SellerWorkspace({ onLogout, accountLabel = "Vendor Console" }: S
 
                     <div className="min-w-0 flex-1">
                       <div className={`truncate text-[14px] font-semibold leading-tight ${active ? "text-accent" : "text-text-1"}`}>
-                        {seller.seller_name}
+                        {displayName(seller.seller_name)}
                       </div>
                       <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-text-3">
                         <span>
@@ -277,7 +365,7 @@ export function SellerWorkspace({ onLogout, accountLabel = "Vendor Console" }: S
                     </div>
 
                     <motion.span
-                      animate={{ rotate: active ? 180 : 0 }}
+                      animate={{ rotate: expanded ? 180 : 0 }}
                       transition={{ duration: 0.22, ease: EASE_SNAPPY }}
                       className="shrink-0 text-text-3"
                     >
@@ -287,7 +375,7 @@ export function SellerWorkspace({ onLogout, accountLabel = "Vendor Console" }: S
 
                   {/* Expanded details */}
                   <AnimatePresence initial={false}>
-                    {active && (
+                    {expanded && (
                       <motion.div
                         key="expanded"
                         initial={{ height: 0, opacity: 0 }}
@@ -353,15 +441,43 @@ export function SellerWorkspace({ onLogout, accountLabel = "Vendor Console" }: S
           </div>
         </aside>
 
-        {/* ── CENTER: Negotiation feed ──────────────────────────────────── */}
+        {/* ── CENTER: Dashboard / Negotiations toggle ───────────────────── */}
         <main className="flex min-w-0 flex-1 flex-col">
-          <div className="flex shrink-0 items-center justify-between border-b border-border bg-white px-6 py-3.5">
-            <div className="flex items-center gap-2">
-              <span className="text-[15px] font-bold text-text-1">Negotiations</span>
-              <span className="rounded-full bg-surface px-2 py-0.5 text-[11px] font-semibold text-text-3">
-                {activeNegotiations[0]?.logs.length ?? 0} messages
-              </span>
+          {/* Header with toggle */}
+          <div className="flex shrink-0 items-center justify-between border-b border-border bg-white px-6 py-3">
+            {/* Tab toggle */}
+            <div className="flex items-center gap-1 rounded-xl bg-surface p-1">
+              <button
+                type="button"
+                onClick={() => setCenterView("dashboard")}
+                className={`rounded-lg px-3.5 py-1.5 text-[12px] font-semibold transition-all ${
+                  centerView === "dashboard"
+                    ? "bg-accent text-white shadow-[0_2px_8px_rgba(47,111,237,0.28)]"
+                    : "text-text-2 hover:text-text-1"
+                }`}
+              >
+                Dashboard
+              </button>
+              <button
+                type="button"
+                onClick={() => setCenterView("negotiations")}
+                className={`rounded-lg px-3.5 py-1.5 text-[12px] font-semibold transition-all ${
+                  centerView === "negotiations"
+                    ? "bg-accent text-white shadow-[0_2px_8px_rgba(47,111,237,0.28)]"
+                    : "text-text-2 hover:text-text-1"
+                }`}
+              >
+                Negotiations
+                {(activeNegotiations[0]?.logs.length ?? 0) > 0 && (
+                  <span className={`ml-1.5 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+                    centerView === "negotiations" ? "bg-white/25 text-white" : "bg-accent/10 text-accent"
+                  }`}>
+                    {activeNegotiations[0]?.logs.length}
+                  </span>
+                )}
+              </button>
             </div>
+            {/* Style pill */}
             {activeSeller?.negotiation_style && (
               <span className={`rounded-full border px-3 py-1 text-[11px] font-semibold capitalize ${
                 STYLE_PILL[activeSeller.negotiation_style] ?? "border-border bg-white text-text-2"
@@ -371,6 +487,185 @@ export function SellerWorkspace({ onLogout, accountLabel = "Vendor Console" }: S
             )}
           </div>
 
+          {/* ── Dashboard view ────────────────────────────────────────────── */}
+          {centerView === "dashboard" && (
+            <div className="flex-1 overflow-y-auto">
+              {metrics || briefLoading ? (
+                <div className="p-5 space-y-4">
+                  {/* Stat cards */}
+                  {metrics && (
+                    <div className="flex gap-2.5">
+                      <StatCard
+                        label="Outcome"
+                        value={metrics.outcome?.status ?? "—"}
+                        accent={metrics.outcome?.status === "accepted"}
+                        danger={metrics.outcome?.status === "failed"}
+                      />
+                      <StatCard label="Final price" value={metrics.finalPrice ? `€${metrics.finalPrice}` : "—"} />
+                      <StatCard
+                        label="vs budget"
+                        value={metrics.discount !== 0 ? `${metrics.discount > 0 ? "-" : "+"}${Math.abs(metrics.discount)}%` : "—"}
+                        accent={metrics.discount > 0}
+                      />
+                      <StatCard label="Rounds" value={metrics.allRounds ? String(metrics.allRounds) : "—"} />
+                      <StatCard label="Suppliers" value={String(suppliers.length)} />
+                    </div>
+                  )}
+
+                  {/* Charts */}
+                  {(priceData.length > 0 || supplierChartData.length > 0) && (
+                    <div className="flex gap-4">
+                      {priceData.length > 1 && (
+                        <div className="flex-1 rounded-2xl border border-border bg-white p-4" style={{ height: 160 }}>
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.06em] text-text-3 mb-2">Price / Round</p>
+                          <ResponsiveContainer width="100%" height="85%">
+                            <LineChart data={priceData} margin={{ top: 2, right: 4, bottom: 0, left: 0 }}>
+                              <XAxis dataKey="round" tick={{ fontSize: 9, fill: "#9ca3af" }} axisLine={false} tickLine={false} />
+                              <YAxis tick={{ fontSize: 9, fill: "#9ca3af" }} width={42} axisLine={false} tickLine={false} tickFormatter={(v) => `€${v}`} />
+                              <Tooltip
+                                formatter={(v) => [`€${v}`, "Price"]}
+                                contentStyle={{ fontSize: 11, borderRadius: 8, border: "1px solid #e5e7eb", boxShadow: "0 4px 12px rgba(0,0,0,0.08)" }}
+                              />
+                              <Line type="monotone" dataKey="price" stroke="#2f6fed" strokeWidth={2} dot={{ r: 3, fill: "#2f6fed", strokeWidth: 0 }} activeDot={{ r: 4 }} />
+                            </LineChart>
+                          </ResponsiveContainer>
+                        </div>
+                      )}
+                      {supplierChartData.length > 0 && (
+                        <div className="flex-1 rounded-2xl border border-border bg-white p-4" style={{ height: 160 }}>
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.06em] text-text-3 mb-2">Supplier Match %</p>
+                          <ResponsiveContainer width="100%" height="85%">
+                            <BarChart data={supplierChartData} barSize={16} margin={{ top: 2, right: 4, bottom: 0, left: 0 }}>
+                              <XAxis dataKey="name" tick={{ fontSize: 9, fill: "#9ca3af" }} axisLine={false} tickLine={false} />
+                              <YAxis tick={{ fontSize: 9, fill: "#9ca3af" }} width={28} axisLine={false} tickLine={false} domain={[0, 100]} />
+                              <Tooltip
+                                formatter={(v) => [`${v}%`, "Match"]}
+                                contentStyle={{ fontSize: 11, borderRadius: 8, border: "1px solid #e5e7eb", boxShadow: "0 4px 12px rgba(0,0,0,0.08)" }}
+                              />
+                              <Bar dataKey="score" fill="#2f6fed" radius={[3, 3, 0, 0]} />
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Deal card — winning product details */}
+                  {metrics?.rec?.recommended_product && (
+                    <div className="rounded-2xl border border-border bg-white p-5">
+                      <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.07em] text-text-3">Winning Deal</p>
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <p className="truncate text-[15px] font-bold text-text-1">{metrics.rec.recommended_product}</p>
+                          <p className="mt-0.5 text-[12px] text-text-3">{metrics.rec.recommended_seller}</p>
+                        </div>
+                        <div className="shrink-0 text-right">
+                          <p className="text-[18px] font-bold text-accent">€{metrics.rec.price_eur}</p>
+                          <span className={`text-[10px] font-semibold capitalize ${
+                            metrics.rec.risk_level === "low" ? "text-success" :
+                            metrics.rec.risk_level === "high" ? "text-danger" : "text-warning"
+                          }`}>{metrics.rec.risk_level} risk</span>
+                        </div>
+                      </div>
+                      <div className="mt-3 flex gap-3">
+                        <div className="flex-1 rounded-xl bg-surface px-3 py-2.5">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.06em] text-text-3">Delivery</p>
+                          <p className="mt-0.5 text-[14px] font-bold text-text-1">{metrics.rec.delivery_days}d</p>
+                        </div>
+                        <div className="flex-1 rounded-xl bg-surface px-3 py-2.5">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.06em] text-text-3">Warranty</p>
+                          <p className="mt-0.5 text-[14px] font-bold text-text-1">{metrics.rec.warranty_years}yr</p>
+                        </div>
+                        <div className="flex-1 rounded-xl bg-surface px-3 py-2.5">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.06em] text-text-3">Strategy</p>
+                          <p className="mt-0.5 text-[14px] font-bold capitalize text-text-1">{metrics.outcome?.strategy ?? "—"}</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Rejected suppliers */}
+                  {(metrics?.outcome?.rejected_sellers?.length ?? 0) > 0 && (
+                    <div className="rounded-2xl border border-border bg-white p-5">
+                      <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.07em] text-text-3">Rejected Suppliers</p>
+                      <div className="space-y-2">
+                        {metrics!.outcome!.rejected_sellers.map((sid) => {
+                          const s = suppliers.find((x) => x.seller_id === sid);
+                          const v = liveValidations.find((x) => x.seller_id === sid);
+                          const name = displayName(s?.seller_name ?? sid);
+                          const palette = avatarPalette(sid, suppliers);
+                          const initial = name.trim()[0]?.toUpperCase() ?? "?";
+                          return (
+                            <div key={sid} className="flex items-center gap-3 rounded-xl bg-surface px-3 py-2.5">
+                              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-bold"
+                                style={{ background: palette.bg, color: palette.text }}>
+                                {initial}
+                              </span>
+                              <div className="min-w-0 flex-1">
+                                <p className="text-[13px] font-semibold text-text-1">{name}</p>
+                                {v?.failed_constraints?.length ? (
+                                  <p className="text-[11px] text-text-3 truncate">{v.failed_constraints.join(" · ")}</p>
+                                ) : (
+                                  <p className="text-[11px] text-text-3">Price floor exceeded</p>
+                                )}
+                              </div>
+                              <span className="shrink-0 rounded-full border border-danger/20 bg-danger-soft px-2 py-0.5 text-[10px] font-semibold text-danger">
+                                Rejected
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Pioneer signal breakdown */}
+                  {liveLogs.some((l) => l.pioneer_labels.length > 0) && (() => {
+                    const counts: Record<string, number> = {};
+                    liveLogs.forEach((l) => l.pioneer_labels.forEach((lbl) => { counts[lbl] = (counts[lbl] ?? 0) + 1; }));
+                    const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+                    return (
+                      <div className="rounded-2xl border border-border bg-white p-5">
+                        <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.07em] text-text-3">Pioneer Signals</p>
+                        <div className="flex flex-wrap gap-2">
+                          {entries.map(([label, count]) => (
+                            <div key={label} className="flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1">
+                              <span className="text-[11px] font-semibold text-text-2 capitalize">{label.replace(/_/g, " ")}</span>
+                              <span className="flex h-4 w-4 items-center justify-center rounded-full bg-accent/15 text-[9px] font-bold text-accent">{count}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* AI Seller Brief */}
+                  {(briefLoading || aiBrief) && (
+                    <div className="rounded-2xl border border-accent-border bg-accent-soft/30 px-5 py-4">
+                      <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.07em] text-accent">AI Seller Brief</p>
+                      {briefLoading ? (
+                        <div className="space-y-2">
+                          <div className="h-2.5 w-full animate-pulse rounded-full bg-accent/15" />
+                          <div className="h-2.5 w-4/5 animate-pulse rounded-full bg-accent/10" />
+                          <div className="h-2.5 w-3/5 animate-pulse rounded-full bg-accent/10" />
+                        </div>
+                      ) : (
+                        <p className="text-[13px] leading-relaxed text-text-2">{aiBrief}</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="flex h-full flex-col items-center justify-center gap-2 py-20 text-center">
+                  <p className="text-[13px] font-medium text-text-2">No data yet</p>
+                  <p className="text-[12px] text-text-3">Dashboard populates after a buyer run completes.</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Negotiations view ─────────────────────────────────────────── */}
+          {centerView === "negotiations" && (
           <div className="flex-1 overflow-y-auto space-y-3 p-5">
             {activeNegotiations.map(({ sellerId, seller, logs, lastMsg, roundCount, validation }) => {
               if (!logs.length) return (
@@ -383,21 +678,12 @@ export function SellerWorkspace({ onLogout, accountLabel = "Vendor Console" }: S
                 </div>
               );
               const palette = avatarPalette(sellerId, suppliers);
-              const initial = seller?.seller_name.trim()[0]?.toUpperCase() ?? "?";
+              const initial = displayName(seller?.seller_name ?? "").trim()[0]?.toUpperCase() ?? "?";
               return (
                 <article
                   key={sellerId}
                   className="rounded-2xl border border-border bg-white p-5"
-                  style={{
-                    boxShadow: "0 1px 4px rgba(0,0,0,0.05), 0 4px 20px rgba(0,0,0,0.06)",
-                    borderLeft: validation?.status === "passed"
-                      ? "3px solid var(--success)"
-                      : validation?.status === "rejected"
-                      ? "3px solid var(--danger)"
-                      : validation?.status === "negotiable"
-                      ? "3px solid var(--warning)"
-                      : undefined,
-                  }}
+                  style={{ boxShadow: "0 1px 4px rgba(0,0,0,0.05), 0 4px 20px rgba(0,0,0,0.06)" }}
                 >
                   {/* Avatar header */}
                   <div className="mb-3 flex items-center justify-between gap-3">
@@ -411,7 +697,7 @@ export function SellerWorkspace({ onLogout, accountLabel = "Vendor Console" }: S
                         {initial}
                       </span>
                       <span className="ml-1 text-[14px] font-semibold text-text-1">
-                        {seller?.seller_name ?? sellerId}
+                        {displayName(seller?.seller_name ?? sellerId)}
                       </span>
                     </div>
                     {validation?.status && (
@@ -463,7 +749,7 @@ export function SellerWorkspace({ onLogout, accountLabel = "Vendor Console" }: S
                           }`}>
                             <div className="flex items-center gap-2 mb-0.5">
                               <span className="text-[10px] font-semibold capitalize text-text-3">
-                                {log.speaker === "buyer" ? "Buyer Agent" : seller?.seller_name}
+                                {log.speaker === "buyer" ? "Buyer Agent" : displayName(seller?.seller_name ?? "")}
                               </span>
                               <span className="text-[10px] text-text-3">Round {log.round}</span>
                             </div>
@@ -486,6 +772,7 @@ export function SellerWorkspace({ onLogout, accountLabel = "Vendor Console" }: S
               );
             })}
           </div>
+          )}
         </main>
 
         {/* ── RIGHT: Inventory ──────────────────────────────────────────── */}
@@ -493,7 +780,7 @@ export function SellerWorkspace({ onLogout, accountLabel = "Vendor Console" }: S
           {/* Supplier profile */}
           {activeSeller && (() => {
             const palette = avatarPalette(activeSeller.seller_id, suppliers);
-            const initial = activeSeller.seller_name.trim()[0]?.toUpperCase() ?? "?";
+            const initial = displayName(activeSeller.seller_name).trim()[0]?.toUpperCase() ?? "?";
             return (
               <div className="shrink-0 border-b border-border bg-gradient-to-b from-accent-soft/40 to-white px-5 pb-5 pt-5">
                 <div className="flex items-center gap-3.5">
@@ -504,7 +791,7 @@ export function SellerWorkspace({ onLogout, accountLabel = "Vendor Console" }: S
                     {initial}
                   </span>
                   <div className="min-w-0">
-                    <p className="truncate text-[15px] font-bold leading-tight text-text-1">{activeSeller.seller_name}</p>
+                    <p className="truncate text-[15px] font-bold leading-tight text-text-1">{displayName(activeSeller.seller_name)}</p>
                     <p className="mt-0.5 text-[11px] capitalize text-text-3">
                       {activeSeller.region ?? "—"} · {activeSeller.negotiation_style ?? "standard"}
                     </p>
@@ -587,7 +874,7 @@ export function SellerWorkspace({ onLogout, accountLabel = "Vendor Console" }: S
               <div className="pointer-events-auto w-full max-w-[520px] rounded-2xl border border-border bg-white shadow-[0_24px_60px_rgba(0,0,0,0.18)] overflow-hidden">
                 <AddProductModal
                   sellerId={activeSellerId}
-                  sellerName={activeSeller?.seller_name ?? ""}
+                  sellerName={displayName(activeSeller?.seller_name ?? "")}
                   onSave={addProduct}
                   onClose={() => setShowAddModal(false)}
                 />
@@ -641,6 +928,19 @@ function PipeSep() {
   return <span className="mx-2 text-border">|</span>;
 }
 
+// ── Stat card (metrics strip) ─────────────────────────────────────────────────
+
+function StatCard({ label, value, accent, danger }: { label: string; value: string; accent?: boolean; danger?: boolean }) {
+  return (
+    <div className="flex-1 min-w-0 rounded-xl border border-border bg-white px-3 py-2.5">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.07em] text-text-3">{label}</div>
+      <div className={`mt-0.5 truncate text-[15px] font-bold capitalize leading-tight ${
+        accent ? "text-success" : danger ? "text-danger" : "text-text-1"
+      }`}>{value}</div>
+    </div>
+  );
+}
+
 // ── Product row ───────────────────────────────────────────────────────────────
 
 function ProductRow({ product, onDelete }: { product: SellerInventoryProduct; onDelete: () => void }) {
@@ -691,7 +991,7 @@ const AVAILABILITY_OPTIONS: { value: SellerInventoryProduct["specifications"]["a
 ];
 
 function emptyDraft(): Partial<SellerInventoryProduct> {
-  return { product: "", category: "GPU", price_eur: undefined, approximate_delivery_days: undefined, max_negotiation_percent: undefined, specifications: { length_mm: 0, power_watts: 0, warranty_years: 0, availability: "in_stock", compatibility_notes: "" } };
+  return { product: "", category: "", price_eur: undefined, approximate_delivery_days: undefined, max_negotiation_percent: undefined, specifications: { length_mm: 0, power_watts: 0, warranty_years: 0, availability: "in_stock", compatibility_notes: "" } };
 }
 
 function AddProductModal({ sellerId, sellerName, onSave, onClose }: {
@@ -740,7 +1040,7 @@ function AddProductModal({ sellerId, sellerName, onSave, onClose }: {
     onSave({
       product_id: `${sellerId}-${Date.now()}`,
       product: name,
-      category: draft.category?.trim() || "GPU",
+      category: draft.category?.trim() || "General",
       price_eur: draft.price_eur,
       approximate_delivery_days: draft.approximate_delivery_days,
       max_negotiation_percent: draft.max_negotiation_percent,
@@ -775,12 +1075,12 @@ function AddProductModal({ sellerId, sellerName, onSave, onClose }: {
         )}
 
         <FormField label="Product name *">
-          <input ref={firstInputRef} type="text" value={draft.product ?? ""} onChange={(e) => { setDraft((p) => ({ ...p, product: e.target.value })); setError(null); }} placeholder="e.g. RTX 4070 Super Compact" className="form-input" />
+          <input ref={firstInputRef} type="text" value={draft.product ?? ""} onChange={(e) => { setDraft((p) => ({ ...p, product: e.target.value })); setError(null); }} placeholder="e.g. Ergonomic Chair, RTX 4090, Pressure Sensor..." className="form-input" />
         </FormField>
 
         <div className="grid grid-cols-2 gap-3">
           <FormField label="Category">
-            <input type="text" value={draft.category ?? "GPU"} onChange={(e) => setDraft((p) => ({ ...p, category: e.target.value }))} className="form-input" />
+            <input type="text" value={draft.category ?? ""} onChange={(e) => setDraft((p) => ({ ...p, category: e.target.value }))} placeholder="e.g. Furniture, GPU, Sensor" className="form-input" />
           </FormField>
           <FormField label="Availability">
             <select value={draft.specifications?.availability ?? "in_stock"} onChange={(e) => setSpec("availability", e.target.value as SellerInventoryProduct["specifications"]["availability"])} className="form-input">
@@ -791,31 +1091,31 @@ function AddProductModal({ sellerId, sellerName, onSave, onClose }: {
 
         <div className="grid grid-cols-2 gap-3">
           <FormField label="Price (EUR) *">
-            <input type="number" min={0} value={draft.price_eur ?? ""} onChange={(e) => { setDraft((p) => ({ ...p, price_eur: parseFloat(e.target.value) || undefined })); setError(null); }} placeholder="650" className="form-input" />
+            <input type="number" min={0} value={draft.price_eur ?? ""} onChange={(e) => { setDraft((p) => ({ ...p, price_eur: parseFloat(e.target.value) || undefined })); setError(null); }} placeholder="e.g. 299" className="form-input" />
           </FormField>
           <FormField label="Max negotiation (%) *">
-            <input type="number" min={0} max={100} value={draft.max_negotiation_percent ?? ""} onChange={(e) => { setDraft((p) => ({ ...p, max_negotiation_percent: parseFloat(e.target.value) || undefined })); setError(null); }} placeholder="5" className="form-input" />
+            <input type="number" min={0} max={100} value={draft.max_negotiation_percent ?? ""} onChange={(e) => { setDraft((p) => ({ ...p, max_negotiation_percent: parseFloat(e.target.value) || undefined })); setError(null); }} placeholder="e.g. 8" className="form-input" />
           </FormField>
         </div>
 
         <div className="grid grid-cols-3 gap-3">
           <FormField label="Length (mm) *">
-            <input type="number" min={0} value={draft.specifications?.length_mm || ""} onChange={(e) => { setSpec("length_mm", parseFloat(e.target.value) || 0); setError(null); }} placeholder="267" className="form-input" />
+            <input type="number" min={0} value={draft.specifications?.length_mm || ""} onChange={(e) => { setSpec("length_mm", parseFloat(e.target.value) || 0); setError(null); }} placeholder="e.g. 500" className="form-input" />
           </FormField>
           <FormField label="Power (W) *">
-            <input type="number" min={0} value={draft.specifications?.power_watts || ""} onChange={(e) => { setSpec("power_watts", parseFloat(e.target.value) || 0); setError(null); }} placeholder="220" className="form-input" />
+            <input type="number" min={0} value={draft.specifications?.power_watts || ""} onChange={(e) => { setSpec("power_watts", parseFloat(e.target.value) || 0); setError(null); }} placeholder="e.g. 45" className="form-input" />
           </FormField>
           <FormField label="Warranty (yrs) *">
-            <input type="number" min={0} step={0.5} value={draft.specifications?.warranty_years ?? ""} onChange={(e) => { setSpec("warranty_years", parseFloat(e.target.value) || 0); setError(null); }} placeholder="2" className="form-input" />
+            <input type="number" min={0} step={0.5} value={draft.specifications?.warranty_years ?? ""} onChange={(e) => { setSpec("warranty_years", parseFloat(e.target.value) || 0); setError(null); }} placeholder="e.g. 2" className="form-input" />
           </FormField>
         </div>
 
         <FormField label="Delivery (days) *">
-          <input type="number" min={0} value={draft.approximate_delivery_days ?? ""} onChange={(e) => { setDraft((p) => ({ ...p, approximate_delivery_days: parseInt(e.target.value) || undefined })); setError(null); }} placeholder="5" className="form-input" />
+          <input type="number" min={0} value={draft.approximate_delivery_days ?? ""} onChange={(e) => { setDraft((p) => ({ ...p, approximate_delivery_days: parseInt(e.target.value) || undefined })); setError(null); }} placeholder="e.g. 7" className="form-input" />
         </FormField>
 
         <FormField label="Compatibility notes">
-          <textarea rows={2} value={draft.specifications?.compatibility_notes ?? ""} onChange={(e) => setSpec("compatibility_notes", e.target.value)} placeholder="e.g. Best compact AI workstation fit; strong thermal profile." className="form-input resize-none" />
+          <textarea rows={2} value={draft.specifications?.compatibility_notes ?? ""} onChange={(e) => setSpec("compatibility_notes", e.target.value)} placeholder="e.g. Fits standard rack mounts; CE certified; ships EU-wide." className="form-input resize-none" />
         </FormField>
       </div>
 

@@ -86,7 +86,8 @@ export type ConversationLogEventKind =
   | "turn"
   | "seller_rejection"
   | "supplier_fallback"
-  | "strategy_selected";
+  | "strategy_selected"
+  | "renegotiation_start";
 
 export interface ConversationLog {
   seller_id: string;
@@ -128,6 +129,8 @@ export interface EscalationResult {
   trigger: string;
   reason: string;
   question_for_human: string;
+  renegotiate_used?: boolean;
+  has_winning_offer?: boolean;
 }
 
 export interface FinalRecommendation {
@@ -210,6 +213,9 @@ export type StreamEventType =
   | "escalation"
   | "recommendation"
   | "audit"
+  | "pioneer"
+  | "tavily"
+  | "fal"
   | "done"
   | "error";
 
@@ -242,6 +248,8 @@ export interface HumanAlertData {
     delivery_days?: number;
   } | null;
   budget_eur?: number;
+  renegotiate_used?: boolean;
+  has_winning_offer?: boolean;
 }
 
 export type HumanResponseDecision = "approve" | "reject" | "adjust";

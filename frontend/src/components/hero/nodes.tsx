@@ -9,6 +9,14 @@ import {
   GitBranch,
   MagnifyingGlass,
   Scales,
+  MagnifyingGlassPlus,
+  Tag,
+  Image,
+  ClipboardText,
+  CurrencyDollar,
+  Truck,
+  ShieldCheck,
+  Warning,
 } from "@phosphor-icons/react";
 import { useEffect, useRef } from "react";
 import type { ConversationLog } from "@/lib/types";
@@ -448,6 +456,204 @@ export function NegotiationNode({
 
 // Backwards-compat alias — nothing outside this file should need it
 export { NegotiationNode as BuyerAgentNode };
+
+// ─── Compact Sub-agent node (shared shell for Price/Delivery/Warranty/Risk) ────
+
+export function SubAgentNode({
+  data,
+}: NodeProps<{ label: string; icon: "price" | "delivery" | "warranty" | "risk"; active: boolean; done: boolean }>) {
+  const icons = {
+    price: CurrencyDollar,
+    delivery: Truck,
+    warranty: ShieldCheck,
+    risk: Warning,
+  };
+  const Icon = icons[data.icon];
+  return (
+    <motion.div
+      {...SPAWN}
+      style={{ minWidth: 130 }}
+      className={`rounded-lg bg-white px-3 py-2.5 ${ringBase} ${ringState(data)}`}
+    >
+      <Handle type="target" position={Position.Left} className="!opacity-0" />
+      <Handle type="source" position={Position.Right} className="!opacity-0" />
+      <div className="flex items-center gap-2">
+        <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-md transition-colors duration-200 ${data.active || data.done ? "bg-accent-soft text-accent" : "bg-surface text-text-3"}`}>
+          <Icon weight="duotone" className="h-3.5 w-3.5" />
+        </span>
+        <div>
+          <div className="text-[8px] font-medium uppercase tracking-[0.14em] text-text-3">Sub-agent</div>
+          <div className="text-[11px] font-semibold tracking-tight text-text-1">{data.label}</div>
+        </div>
+      </div>
+      {data.active && (
+        <div className="mt-1.5 flex items-center gap-1 text-[9px] text-text-2">
+          <span className="h-1 w-1 shrink-0 animate-pulse rounded-full bg-accent" />
+          Running…
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
+// ─── Pioneer Node ──────────────────────────────────────────────────────────────
+
+export function PioneerNode({ data }: NodeProps<StateProps & { labeledCount?: number }>) {
+  return (
+    <motion.div
+      {...SPAWN}
+      style={{ minWidth: 185 }}
+      className={`rounded-xl bg-white px-4 py-3.5 ${ringBase} ${ringState(data)}`}
+    >
+      <Handle type="target" position={Position.Left} className="!opacity-0" />
+      <Handle type="source" position={Position.Right} className="!opacity-0" />
+      <div className="flex items-center gap-2.5">
+        <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg transition-colors duration-200 ${data.active || data.done ? "bg-accent-soft text-accent" : "bg-surface text-text-3"}`}>
+          <Tag weight="duotone" className="h-[18px] w-[18px]" />
+        </span>
+        <div className="leading-tight">
+          <div className="text-[9px] font-medium uppercase tracking-[0.14em] text-text-3">Inference</div>
+          <div className="text-[13px] font-semibold tracking-tight text-text-1">Pioneer</div>
+        </div>
+      </div>
+      <AnimatePresence mode="wait" initial={false}>
+        {data.active ? (
+          <motion.div key="active" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="mt-2 flex items-center gap-1.5 text-[10px] text-text-2"
+          >
+            <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-accent" />
+            Labeling messages…
+          </motion.div>
+        ) : data.done ? (
+          <motion.div key="done" initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+            className="mt-2 flex items-center gap-1.5 text-[10px] text-emerald-600"
+          >
+            <span className="text-[9px]">✓</span>
+            {data.labeledCount != null ? `${data.labeledCount} turn${data.labeledCount !== 1 ? "s" : ""} labeled` : "Labels applied"}
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+    </motion.div>
+  );
+}
+
+// ─── Tavily Node ───────────────────────────────────────────────────────────────
+
+export function TavilyNode({ data }: NodeProps<StateProps>) {
+  return (
+    <motion.div
+      {...SPAWN}
+      style={{ minWidth: 165 }}
+      className={`rounded-xl bg-white px-4 py-3.5 ${ringBase} ${ringState(data)}`}
+    >
+      <Handle type="target" position={Position.Left} className="!opacity-0" />
+      <div className="flex items-center gap-2.5">
+        <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg transition-colors duration-200 ${data.active || data.done ? "bg-accent-soft text-accent" : "bg-surface text-text-3"}`}>
+          <MagnifyingGlassPlus weight="duotone" className="h-[18px] w-[18px]" />
+        </span>
+        <div className="leading-tight">
+          <div className="text-[9px] font-medium uppercase tracking-[0.14em] text-text-3">Enrichment</div>
+          <div className="text-[13px] font-semibold tracking-tight text-text-1">Tavily</div>
+        </div>
+      </div>
+      <AnimatePresence mode="wait" initial={false}>
+        {data.active ? (
+          <motion.div key="active" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="mt-2 flex items-center gap-1.5 text-[10px] text-text-2"
+          >
+            <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-accent" />
+            Searching web…
+          </motion.div>
+        ) : data.done ? (
+          <motion.div key="done" initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+            className="mt-2 flex items-center gap-1.5 text-[10px] text-emerald-600"
+          >
+            <span className="text-[9px]">✓</span> Suppliers enriched
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+    </motion.div>
+  );
+}
+
+// ─── Audit Node ────────────────────────────────────────────────────────────────
+
+export function AuditNode({ data }: NodeProps<StateProps>) {
+  return (
+    <motion.div
+      {...SPAWN}
+      style={{ minWidth: 165 }}
+      className={`rounded-xl bg-white px-4 py-3.5 ${ringBase} ${ringState(data)}`}
+    >
+      <Handle type="target" position={Position.Left} className="!opacity-0" />
+      <Handle type="source" position={Position.Right} className="!opacity-0" />
+      <div className="flex items-center gap-2.5">
+        <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg transition-colors duration-200 ${data.active || data.done ? "bg-accent-soft text-accent" : "bg-surface text-text-3"}`}>
+          <ClipboardText weight="duotone" className="h-[18px] w-[18px]" />
+        </span>
+        <div className="leading-tight">
+          <div className="text-[9px] font-medium uppercase tracking-[0.14em] text-text-3">Agent</div>
+          <div className="text-[13px] font-semibold tracking-tight text-text-1">Audit Summary</div>
+        </div>
+      </div>
+      <AnimatePresence mode="wait" initial={false}>
+        {data.active ? (
+          <motion.div key="active" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="mt-2 flex items-center gap-1.5 text-[10px] text-text-2"
+          >
+            <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-accent" />
+            Writing narrative…
+          </motion.div>
+        ) : data.done ? (
+          <motion.div key="done" initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+            className="mt-2 flex items-center gap-1.5 text-[10px] text-emerald-600"
+          >
+            <span className="text-[9px]">✓</span> Summary ready
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+    </motion.div>
+  );
+}
+
+// ─── fal Node ─────────────────────────────────────────────────────────────────
+
+export function FalNode({ data }: NodeProps<StateProps>) {
+  return (
+    <motion.div
+      {...SPAWN}
+      style={{ minWidth: 155 }}
+      className={`rounded-xl bg-white px-4 py-3.5 ${ringBase} ${ringState(data)}`}
+    >
+      <Handle type="target" position={Position.Left} className="!opacity-0" />
+      <div className="flex items-center gap-2.5">
+        <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg transition-colors duration-200 ${data.active || data.done ? "bg-accent-soft text-accent" : "bg-surface text-text-3"}`}>
+          <Image weight="duotone" className="h-[18px] w-[18px]" />
+        </span>
+        <div className="leading-tight">
+          <div className="text-[9px] font-medium uppercase tracking-[0.14em] text-text-3">Generative</div>
+          <div className="text-[13px] font-semibold tracking-tight text-text-1">fal Deal Card</div>
+        </div>
+      </div>
+      <AnimatePresence mode="wait" initial={false}>
+        {data.active ? (
+          <motion.div key="active" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="mt-2 flex items-center gap-1.5 text-[10px] text-text-2"
+          >
+            <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-accent" />
+            Generating image…
+          </motion.div>
+        ) : data.done ? (
+          <motion.div key="done" initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+            className="mt-2 flex items-center gap-1.5 text-[10px] text-emerald-600"
+          >
+            <span className="text-[9px]">✓</span> Card generated
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+    </motion.div>
+  );
+}
 
 // ─── Seller Node ───────────────────────────────────────────────────────────────
 

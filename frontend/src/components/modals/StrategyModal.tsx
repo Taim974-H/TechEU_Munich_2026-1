@@ -33,6 +33,12 @@ const ROUND_GLYPHS: Record<NegotiationStrategy, string> = {
   light: "●●",
 };
 
+const PLAIN_ENGLISH: Record<NegotiationStrategy, string> = {
+  light:      "Small discount ask (~4%). Almost always accepted. Use when you just need the deal done.",
+  medium:     "Moderate push (~8%). Good balance — likely accepted, decent savings.",
+  aggressive: "Hard push (~12%+). May hit the seller's price floor and trigger a waterfall to the next supplier.",
+};
+
 export function StrategyModal({ options, onChoose }: Props) {
   const backdropRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -110,7 +116,9 @@ export function StrategyModal({ options, onChoose }: Props) {
                     <span className="text-[13.5px] font-semibold text-text-1">{opt.label}</span>
                     <span className="text-[11px] text-text-3">up to {opt.max_rounds} rounds</span>
                   </div>
-                  <p className="mt-0.5 text-[12px] leading-relaxed text-text-2">{opt.description}</p>
+                  <p className="mt-1 text-[12px] leading-relaxed text-text-2">
+                    {PLAIN_ENGLISH[opt.id] ?? opt.description}
+                  </p>
                 </div>
 
                 {/* Arrow */}

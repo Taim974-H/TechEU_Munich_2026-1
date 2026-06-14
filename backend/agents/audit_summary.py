@@ -99,3 +99,46 @@ def generate_summary(
         return context
 
     return text.strip()
+
+
+def generate_full_narrative(
+    requirements: dict,
+    matched_suppliers: list,
+    conversation_logs: list,
+    validation_results: list,
+    escalation_result: dict,
+    final_recommendation: dict,
+    raw_offers: list | None = None,
+) -> str:
+    context = _build_context(
+        requirements, matched_suppliers, conversation_logs,
+        validation_results, escalation_result, raw_offers,
+    )
+
+    if _DEMO_MODE:
+        return context
+
+    product = requirements.get("product_type", "product")
+    budget = requirements.get("budget_eur", "")
+    rec_seller = final_recommendation.get("recommended_seller", "")
+    rec_product = final_recommendation.get("recommended_product", "")
+    rec_price = final_recommendation.get("price_eur", "")
+
+    prompt = (
+        f"You are writing a detailed procurement audit report for a B2B buyer.\n\n"
+        f"Procurement run data:\n{context}\n\n"
+        f"Product requested: {product}" + (f", budget €{budget}" if budget else "") + "\n"
+        f"Final recommendation: {rec_seller} — {rec_product}" + (f" at €{rec_price}" if rec_price else "") + "\n\n"
+        f"Write a full audit narrative with these four sections:\n"
+        f"1. Process Overview — how many suppliers were contacted, what methods were used.\n"
+        f"2. Supplier Evaluation — for each supplier: what they offered, why they passed or failed.\n"
+        f"3. Risk Assessment — any risks identified (price, delivery, warranty, compliance).\n"
+        f"4. Recommendation Rationale — why this product and supplier were chosen over the alternatives.\n\n"
+        f"Write 3-5 sentences per section. Be specific with numbers. Do not use bullet points."
+    )
+    text = generate(prompt, system=AUDIT_SUMMARY_SYSTEM, temperature=0.5)
+
+    if _LLM_FALLBACK_PREFIX in text or not text.strip():
+        return context
+
+    return text.strip()

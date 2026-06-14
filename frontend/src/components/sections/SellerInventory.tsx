@@ -59,7 +59,7 @@ function SellerCard({
   sellerId: string;
   products: SellerProduct[];
 }) {
-  const sellerName = products[0]?.seller_name ?? sellerId;
+  const sellerName = displayName(products[0]?.seller_name ?? sellerId);
 
   return (
     <article className="rounded-xl bg-surface-2/60 p-4 ring-1 ring-border">
