@@ -1,17 +1,15 @@
-"""Price sub-agent — contributes the price-negotiation angle for a turn."""
-
-
-def angle(requirements: dict, product: dict, seller: dict) -> str:
-    budget = requirements.get("budget_eur", 0)
+def get_price_context(requirements: dict, product: dict, seller: dict) -> str:
+    budget = requirements.get("budget_eur", 650)
     price = product.get("price_eur", 0)
-    diff = price - budget
-
-    if diff > 0:
+    style = seller.get("negotiation_style", "flexible")
+    delta = price - budget
+    if delta > 0:
+        style_note = "be firm and reference competing offers" if style == "aggressive" else "they may have flexibility"
         return (
-            f"Price (€{price}) is €{diff:.0f} over the €{budget} budget — "
-            "ask for a discount or bundled extras to close the gap."
+            f"Price is €{price}, which is €{delta:.0f} over the €{budget} budget. "
+            f"Push for a discount or lower-spec alternative. Seller style is {style} — {style_note}."
         )
     return (
-        f"Price (€{price}) is €{budget - price:.0f} under the €{budget} budget — "
-        "there is room to negotiate value-adds rather than a further discount."
+        f"Price is €{price}, within the €{budget} budget by €{abs(delta):.0f}. "
+        f"Confirm price and explore whether an early-payment or volume discount applies."
     )

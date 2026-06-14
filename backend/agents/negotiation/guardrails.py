@@ -1,68 +1,59 @@
-"""Negotiation guardrails ("god rails") — constrain what the negotiation
-agent may say or concede.
+"""Guardrails — system-prompt constraints + post-generation validation for negotiation turns."""
 
-Applied twice:
-1. `guardrail_instructions()` is appended to the system prompt for every turn.
-2. `enforce_turn()` is a post-generation check run before a turn is emitted.
-"""
-
-import re
-
-MAX_TURN_CHARS = 600
-
-# Seller will never concede below this fraction of the listed price.
-CONCESSION_FLOOR_RATIO = 0.85
+_LLM_FALLBACK_PREFIX = "[LLM unavailable"
 
 
-def concession_floor(product: dict) -> float:
-    return round(product.get("price_eur", 0) * CONCESSION_FLOOR_RATIO, 2)
+def get_system_constraints(requirements: dict) -> str:
+    """Build hard-guardrail system-prompt lines for the current buyer requirements.
 
-
-def guardrail_instructions(product: dict) -> str:
-    floor = concession_floor(product)
-    return (
-        "\n\nGuardrails: Stay strictly on the topic of this product — its price, "
-        "delivery, warranty, technical specs, and risk. Do not discuss unrelated "
-        f"products, companies, or topics. Never promise a price below €{floor:.0f} "
-        f"for this product. Keep the message under {MAX_TURN_CHARS} characters."
-    )
-
-
-def _extract_amounts(text: str) -> list[float]:
-    return [float(m.replace(",", "")) for m in re.findall(r"€\s?([\d,]+(?:\.\d+)?)", text)]
-
-
-def _fallback_message(role: str, product: dict) -> str:
-    if role == "buyer":
-        return (
-            f"We'd like to discuss your {product.get('product', 'product')} offer — "
-            "can you confirm the best price, delivery time, and warranty terms?"
-        )
-    return (
-        f"For {product.get('product', 'this product')}, our offer remains "
-        f"€{product.get('price_eur', 0)}, {product.get('delivery_days', 0)}-day delivery, "
-        f"{product.get('warranty_years', 0)}-year warranty."
-    )
-
-
-def enforce_turn(text: str, *, role: str, product: dict) -> str:
-    """Return a guardrail-safe version of a generated turn.
-
-    Falls back to a templated message if the LLM call failed, produced empty
-    output, or (for sellers) promised a concession below the price floor.
+    GPU-specific dimensions (length, power) are presence-gated.
+    extra_constraints are appended generically.
     """
-    text = (text or "").strip()
-    if not text or text.startswith("[LLM unavailable"):
-        return _fallback_message(role, product)
+    budget = requirements.get("budget_eur", 650)
+    max_days = requirements.get("max_delivery_days", 7)
+    min_warranty = requirements.get("minimum_warranty_years", 1)
+    product_type = requirements.get("product_type", "product")
 
-    if len(text) > MAX_TURN_CHARS:
-        truncated = text[:MAX_TURN_CHARS].rsplit(".", 1)[0]
-        text = truncated + "." if truncated else text[:MAX_TURN_CHARS]
+    lines = [
+        "HARD GUARDRAILS — never concede beyond these in negotiation:",
+        f"- Price ceiling: €{budget * 1.1:.0f} (10 % flex for escalation; final deal must not exceed €{budget})",
+        f"- Maximum delivery: {max_days + 2} days (±2-day buffer; flag to human above {max_days} days)",
+        f"- Minimum warranty: {min_warranty} years",
+    ]
 
-    if role == "seller":
-        floor = concession_floor(product)
-        for amount in _extract_amounts(text):
-            if amount < floor:
-                return _fallback_message(role, product)
+    # Physical size constraint — GPU / hardware only
+    max_len = requirements.get("max_length_mm")
+    if max_len is not None:
+        lines.append(f"- Maximum physical length: {max_len} mm")
 
-    return text
+    # Power constraint — electrical equipment only
+    max_pwr = requirements.get("max_power_watts")
+    if max_pwr is not None:
+        lines.append(f"- Maximum power draw: {max_pwr} W")
+
+    # Extra product-specific constraints
+    for c in requirements.get("extra_constraints", []):
+        label = c.get("label", c.get("field", "spec"))
+        operator = c.get("operator", "<=")
+        limit = c.get("limit", "")
+        unit = c.get("unit", "")
+        op_word = "Maximum" if operator == "<=" else "Minimum"
+        lines.append(f"- {op_word} {label}: {limit}{unit}")
+
+    lines += [
+        f"- Stay on topic: {product_type} procurement only",
+        "- One concise paragraph per turn, professional B2B tone",
+        "- Never invent product names, specs, or prices not provided in context",
+    ]
+
+    return "\n".join(lines)
+
+
+def check_turn(text: str, requirements: dict) -> str:
+    """Post-generation check. Returns the cleaned turn text, or '' if it should be replaced."""
+    if not text or _LLM_FALLBACK_PREFIX in text:
+        return ""
+    stripped = text.strip()
+    if len(stripped) < 10:
+        return ""
+    return stripped

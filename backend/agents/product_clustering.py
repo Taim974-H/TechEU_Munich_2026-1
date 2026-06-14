@@ -1,123 +1,155 @@
-"""Product clustering — groups products from all seller inventories by spec
-similarity relative to the buyer's requirements.
+"""Product clustering — groups inventory products by spec similarity.
 
-Sits between requirement extraction and the judging agent: it replaces the
-old role of supplier_matching.py as the candidate generator. Output is a
-ranked list of ProductCluster, best-fit cluster first.
+Uses greedy euclidean clustering on a normalized feature vector.
+Feature dimensions are derived from the actual product data rather than
+hardcoded GPU assumptions, so the system works for any product category.
 """
 
 import math
 
-from backend.schemas import ProductCluster
+from backend.agents.product_utils import product_matches_requirement
 
-# Max number of clusters returned — bounds the number of judging-agent calls
-# downstream.
-MAX_CLUSTERS = 6
+_CLUSTER_THRESHOLD = 0.35
 
-# Euclidean distance threshold (over normalized spec ratios) below which two
-# products are considered part of the same cluster.
-SIMILARITY_THRESHOLD = 0.25
-
-_SPEC_KEYS = ("length_mm", "power_watts", "price_eur", "delivery_days", "warranty_years")
+# Optional extra dims to include when a majority of products carry them
+_OPTIONAL_DIMS = ["length_mm", "power_watts"]
 
 
-def _ratio_vector(requirements: dict, product: dict) -> list[float]:
-    """Normalize a product's specs against the buyer's requirements.
+def _build_feature_config(all_products: list[dict]) -> tuple[list[str], dict]:
+    """Determine clustering dimensions and normalization ranges from actual product data.
 
-    Ratios <= 1 mean the product meets that requirement. Warranty is inverted
-    (higher warranty is better, so we express it as required/actual).
+    Always uses price_eur and delivery_days (universal).
+    Adds optional dims (length_mm, power_watts) only when >= 50% of products have them.
+    Normalization ranges are computed from real min/max values (not static GPU presets).
     """
-    max_length = requirements.get("max_length_mm", 300) or 1
-    max_power = requirements.get("max_power_watts", 250) or 1
-    budget = requirements.get("budget_eur", 650) or 1
-    max_delivery = requirements.get("max_delivery_days", 7) or 1
-    min_warranty = requirements.get("minimum_warranty_years", 1) or 1
+    n = len(all_products)
+    if n == 0:
+        return [], {}
 
-    warranty_years = product.get("warranty_years", 0) or 0
-    warranty_ratio = min_warranty / warranty_years if warranty_years else 2.0
+    feature_keys: list[str] = ["price_eur", "delivery_days"]
 
-    return [
-        product.get("length_mm", 0) / max_length,
-        product.get("power_watts", 0) / max_power,
-        product.get("price_eur", 0) / budget,
-        product.get("delivery_days", 0) / max_delivery,
-        warranty_ratio,
-    ]
+    for key in _OPTIONAL_DIMS:
+        count = sum(
+            1 for p in all_products
+            if p.get(key) is not None and float(p.get(key, 0)) > 0
+        )
+        if count / n >= 0.5:
+            feature_keys.append(key)
+
+    norms: dict = {}
+    for key in feature_keys:
+        vals = [float(p[key]) for p in all_products if p.get(key) is not None]
+        if not vals:
+            norms[key] = (0.0, 1.0)
+            continue
+        lo, hi = min(vals), max(vals)
+        if hi == lo:
+            hi = lo + 1.0  # guard divide-by-zero
+        norms[key] = (lo, hi)
+
+    return feature_keys, norms
 
 
-def _distance(a: list[float], b: list[float]) -> float:
+def _normalize(product: dict, feature_keys: list[str], norms: dict) -> list[float]:
+    vec = []
+    for key in feature_keys:
+        lo, hi = norms[key]
+        val_raw = product.get(key)
+        if val_raw is None:
+            vec.append(0.5)  # midpoint for absent fields
+        else:
+            val = float(val_raw)
+            vec.append(max(0.0, min(1.0, (val - lo) / (hi - lo))))
+    return vec
+
+
+def _euclidean(a: list[float], b: list[float]) -> float:
     return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
 
 
-def _fit_score(ratio_vector: list[float]) -> float:
-    """Lower is better. Penalizes ratios above 1 (constraint violations) more
-    heavily than being comfortably under budget."""
-    penalty = 0.0
-    for ratio in ratio_vector:
-        if ratio > 1.0:
-            penalty += (ratio - 1.0) * 3.0
-        else:
-            penalty += (1.0 - ratio) * 0.5
-    return penalty
-
-
-def cluster_products(requirements: dict, all_products: list[dict]) -> list[ProductCluster]:
-    """Group products by spec similarity, ranked by best fit to requirements.
-
-    `all_products` is a flat list of product dicts, each carrying
-    `seller_id` / `seller_name` plus the spec fields in `_SPEC_KEYS`.
-    """
-    available = [p for p in all_products if p.get("availability") != "out_of_stock"]
-    if not available:
+def cluster_products(requirements: dict, all_products: list[dict]) -> list[dict]:
+    """Group products by spec similarity. Returns list of ProductCluster dicts."""
+    if not all_products:
         return []
 
-    vectors = [_ratio_vector(requirements, p) for p in available]
+    category_products = [
+        product for product in all_products
+        if product_matches_requirement(product, requirements)
+    ]
+    if not category_products:
+        return []
+    all_products = category_products
 
-    # Greedy clustering: walk products in fit-score order, attach each one to
-    # the first existing cluster whose representative is within threshold,
-    # otherwise start a new cluster.
-    order = sorted(range(len(available)), key=lambda i: _fit_score(vectors[i]))
+    feature_keys, norms = _build_feature_config(all_products)
+    if not feature_keys:
+        return []
 
-    clusters: list[dict] = []  # each: {"members": [idx], "rep_vector": [...]}
-    for idx in order:
-        placed = False
+    clusters: list[dict] = []
+
+    for product in all_products:
+        vec = _normalize(product, feature_keys, norms)
+        best_cluster = None
+        best_dist = _CLUSTER_THRESHOLD
+
         for cluster in clusters:
-            if _distance(vectors[idx], cluster["rep_vector"]) <= SIMILARITY_THRESHOLD:
-                cluster["members"].append(idx)
-                placed = True
-                break
-        if not placed:
-            clusters.append({"members": [idx], "rep_vector": vectors[idx]})
+            dist = _euclidean(vec, cluster["_centroid"])
+            if dist < best_dist:
+                best_dist = dist
+                best_cluster = cluster
 
-    # Rank clusters by the fit score of their best member.
-    clusters.sort(key=lambda c: min(_fit_score(vectors[i]) for i in c["members"]))
-    clusters = clusters[:MAX_CLUSTERS]
+        if best_cluster is None:
+            clusters.append({"_centroid": list(vec), "_products": [product]})
+        else:
+            best_cluster["_products"].append(product)
+            n = len(best_cluster["_products"])
+            best_cluster["_centroid"] = [
+                (best_cluster["_centroid"][i] * (n - 1) + vec[i]) / n
+                for i in range(len(vec))
+            ]
 
-    result: list[ProductCluster] = []
+    clusters.sort(key=lambda c: len(c["_products"]), reverse=True)
+
+    result = []
     for i, cluster in enumerate(clusters):
-        members = [available[idx] for idx in cluster["members"]]
-        member_vectors = [vectors[idx] for idx in cluster["members"]]
+        products = cluster["_products"]
+        if not products:
+            continue
 
-        avg_distance = (
-            sum(_distance(v, cluster["rep_vector"]) for v in member_vectors) / len(member_vectors)
-        )
-        similarity_score = round(max(0.0, 1.0 - avg_distance), 2)
+        if len(products) == 1:
+            similarity = 1.0
+        else:
+            vecs = [_normalize(p, feature_keys, norms) for p in products]
+            dists = [
+                _euclidean(vecs[a], vecs[b])
+                for a in range(len(vecs))
+                for b in range(a + 1, len(vecs))
+            ]
+            avg_dist = sum(dists) / len(dists)
+            similarity = max(0.0, 1.0 - avg_dist / _CLUSTER_THRESHOLD)
 
-        representative_specs = {
-            "avg_price_eur": round(sum(p.get("price_eur", 0) for p in members) / len(members), 2),
-            "avg_delivery_days": round(sum(p.get("delivery_days", 0) for p in members) / len(members), 1),
-            "avg_length_mm": round(sum(p.get("length_mm", 0) for p in members) / len(members), 1),
-            "avg_power_watts": round(sum(p.get("power_watts", 0) for p in members) / len(members), 1),
-            "avg_warranty_years": round(sum(p.get("warranty_years", 0) for p in members) / len(members), 1),
-        }
+        avg_price = sum(p.get("price_eur", 0) for p in products) / len(products)
+        avg_delivery = sum(p.get("delivery_days", 0) for p in products) / len(products)
 
-        result.append(
-            ProductCluster(
-                cluster_id=f"cluster_{i + 1}",
-                products=members,
-                similarity_score=similarity_score,
-                representative_specs=representative_specs,
-            )
-        )
+        result.append({
+            "cluster_id": f"cluster_{i + 1}",
+            "products": [
+                {
+                    **p,
+                    # GPU-specific dims kept for backward compat (0 when absent)
+                    "length_mm": p.get("length_mm", 0),
+                    "power_watts": p.get("power_watts", 0),
+                    "seller_id": p.get("seller_id", ""),
+                    "seller_name": p.get("seller_name", ""),
+                    "product": p.get("product", ""),
+                    "availability": p.get("availability", "unknown"),
+                }
+                for p in products
+            ],
+            "similarity_score": round(similarity, 3),
+            "representative_specs": {
+                "avg_price_eur": round(avg_price, 2),
+                "avg_delivery_days": round(avg_delivery, 1),
+            },
+        })
 
     return result
