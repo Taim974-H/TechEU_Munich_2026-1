@@ -39,7 +39,10 @@ Rules:
 - Use extra_constraints for any other product-specific numeric constraint the buyer states
   (e.g. "load rating at least 120kg" → field=load_rating_kg, operator=>=, limit=120, unit=kg).
 - extra_constraints may be an empty array [] when no additional constraints are stated.
-- Defaults if not mentioned: budget_eur 650, max_delivery_days 7, warranty_required true, minimum_warranty_years 1.
+- BUDGET PARSING: Any standalone number near the product (e.g. "chair 200", "chair 200 euro",
+  "200 EUR chair", "chair €200", "for 200") IS the budget. Set budget_eur to that exact number.
+  Only fall back to 650 if there is truly no number in the request at all.
+- Other defaults if not mentioned: max_delivery_days 7, warranty_required true, minimum_warranty_years 1.
 - All numeric fields must be numbers (not strings). Never return null.
 """
 

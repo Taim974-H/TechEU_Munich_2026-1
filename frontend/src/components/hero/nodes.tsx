@@ -659,6 +659,7 @@ export function FalNode({ data }: NodeProps<StateProps>) {
 
 export function SellerNode({
   data,
+  id,
 }: NodeProps<{
   label: string;
   match: number;
@@ -668,6 +669,10 @@ export function SellerNode({
   selected?: boolean;
   interactive?: boolean;
   chatLines?: ConversationLog[];
+  showDecideButtons?: boolean;
+  onApprove?: (sellerId: string) => void;
+  onReject?: (sellerId: string) => void;
+  onNegotiate?: (sellerId: string) => void;
 }>) {
   const chatLines = data.chatLines ?? [];
   const hasChatLines = chatLines.length > 0;
@@ -798,6 +803,36 @@ export function SellerNode({
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Approve/Reject/Negotiate buttons — shown during negotiation stage */}
+      {data.showDecideButtons && hasChatLines && (
+        <motion.div
+          initial={{ opacity: 0, height: 0 }}
+          animate={{ opacity: 1, height: "auto" }}
+          exit={{ opacity: 0, height: 0 }}
+          transition={{ duration: 0.2 }}
+          className="border-t border-border bg-surface/50 p-2 flex gap-1.5"
+        >
+          <button
+            onClick={() => data.onApprove?.(id)}
+            className="flex-1 rounded-lg bg-success px-2 py-1.5 text-[10px] font-semibold text-white transition-all hover:bg-success/90 active:scale-[0.96]"
+          >
+            Approve
+          </button>
+          <button
+            onClick={() => data.onReject?.(id)}
+            className="flex-1 rounded-lg bg-danger px-2 py-1.5 text-[10px] font-semibold text-white transition-all hover:bg-danger/90 active:scale-[0.96]"
+          >
+            Reject
+          </button>
+          <button
+            onClick={() => data.onNegotiate?.(id)}
+            className="flex-1 rounded-lg bg-accent px-2 py-1.5 text-[10px] font-semibold text-white transition-all hover:bg-accent/90 active:scale-[0.96]"
+          >
+            Negotiate
+          </button>
+        </motion.div>
+      )}
     </motion.div>
   );
 }

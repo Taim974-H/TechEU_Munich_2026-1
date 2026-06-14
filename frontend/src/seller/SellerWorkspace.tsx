@@ -67,6 +67,134 @@ const STYLE_PILL: Record<string, string> = {
   flexible:      "bg-sky-50 text-info border-sky-200",
 };
 
+// ── Seed data — fills the vendor_a dashboard until a real run lands ───────────
+// Real Supabase/REST data overwrites this on arrival.
+const SEED_DEMO_RESULT_VENDOR_A: DemoResult = {
+  request: {
+    request_id: "REQ-DEMO-A",
+    raw_request: "Need 12× RTX 4090 cards for an AI workstation rollout. EU shipping, 2-year warranty, budget ~€1800/unit.",
+    region: "EU-Central",
+    priority: "high",
+  },
+  structured_requirements: {
+    product_type: "GPU",
+    use_case: "AI workstation",
+    max_length_mm: 340,
+    max_power_watts: 450,
+    budget_eur: 1800,
+    max_delivery_days: 10,
+    warranty_required: true,
+    minimum_warranty_years: 2,
+  },
+  clusters: [],
+  judged_candidates: [],
+  matched_suppliers: [
+    {
+      seller_id: "vendor_a",
+      seller_name: "CompuTech Distribution",
+      match_score: 0.92,
+      reason: "Strong GPU specialist with EU-Central warehouse coverage.",
+      specialization: "High-performance GPUs & AI accelerators",
+      region: "EU-Central",
+      reliability_score: 0.94,
+      negotiation_style: "competitive",
+    },
+  ],
+  conversation_logs: [
+    {
+      seller_id: "vendor_a",
+      seller_name: "CompuTech Distribution",
+      speaker: "buyer",
+      message: "Hi — we need 12× RTX 4090 cards for an AI workstation rollout. Budget €1800/unit, 10-day delivery, 2-year warranty. What can you do?",
+      round: 1,
+      event_kind: "turn",
+      pioneer_labels: ["technical_info"],
+      risk_level: "low",
+    },
+    {
+      seller_id: "vendor_a",
+      seller_name: "CompuTech Distribution",
+      speaker: "seller",
+      message: "Happy to help. MSI Gaming X Trio RTX 4090 at €1745/unit, 7-day delivery to EU-Central, 2-year manufacturer warranty included.",
+      round: 1,
+      event_kind: "turn",
+      pioneer_labels: ["price_concession", "delivery_condition"],
+      risk_level: "low",
+      extracted_fields: { price_eur: 1745 },
+    },
+    {
+      seller_id: "vendor_a",
+      seller_name: "CompuTech Distribution",
+      speaker: "buyer",
+      message: "Can you do €1680/unit? That fits our budget envelope cleanly across 12 units.",
+      round: 2,
+      event_kind: "turn",
+      pioneer_labels: ["price_concession"],
+      risk_level: "low",
+    },
+    {
+      seller_id: "vendor_a",
+      seller_name: "CompuTech Distribution",
+      speaker: "seller",
+      message: "I can meet you at €1695/unit if we keep the order at 12 units. Delivery stays 7 days, warranty unchanged.",
+      round: 2,
+      event_kind: "turn",
+      pioneer_labels: ["price_concession", "final_offer"],
+      risk_level: "low",
+      extracted_fields: { price_eur: 1695 },
+    },
+    {
+      seller_id: "vendor_a",
+      seller_name: "CompuTech Distribution",
+      speaker: "buyer",
+      message: "Deal. €1695/unit, 7-day delivery, 2-year warranty. Confirming the PO now.",
+      round: 3,
+      event_kind: "turn",
+      pioneer_labels: ["price_concession"],
+      risk_level: "low",
+    },
+  ],
+  validation_results: [
+    {
+      seller_id: "vendor_a",
+      seller_name: "CompuTech Distribution",
+      product: "MSI Gaming X Trio RTX 4090",
+      length_mm: 337,
+      power_watts: 450,
+      price_eur: 1695,
+      delivery_days: 7,
+      warranty_years: 2,
+      status: "passed",
+      failed_constraints: [],
+      score: 94,
+    },
+  ],
+  tavily_enrichment: { triggered: false, reason: "", results: [] },
+  escalation_result: { escalate: false, trigger: "", reason: "", question_for_human: "" },
+  audit_summary:
+    "Negotiation closed at €1695/unit (5.8% below budget) with 7-day delivery and full 2-year warranty. CompuTech Distribution is the recommended supplier.",
+  final_recommendation: {
+    recommended_seller: "CompuTech Distribution",
+    recommended_product: "MSI Gaming X Trio RTX 4090",
+    price_eur: 1695,
+    delivery_days: 7,
+    warranty_years: 2,
+    technical_status: "passed",
+    risk_level: "low",
+    reason: "Best price-to-spec ratio within budget; reliable EU-Central warehouse.",
+    human_approval_required: false,
+  },
+  deal_card_path: "/assets/fal_deal_card.png",
+  demo_mode: true,
+  negotiation_strategy: "medium",
+  negotiation_outcome: {
+    status: "accepted",
+    strategy: "medium",
+    winning_seller_id: "vendor_a",
+    rejected_sellers: [],
+  },
+};
+
 // ── Root component ────────────────────────────────────────────────────────────
 
 interface SellerWorkspaceProps {
@@ -79,8 +207,8 @@ export function SellerWorkspace({ onLogout, accountLabel = "Vendor Console", sel
   const [suppliers, setSuppliers] = useState<MatchedSupplier[]>([]);
   const [liveLogs, setLiveLogs] = useState<ConversationLog[]>([]);
   const [liveValidations, setLiveValidations] = useState<ValidationResult[]>([]);
-  const [activeSellerId, setActiveSellerId] = useState("");
-  const [expandedSellerId, setExpandedSellerId] = useState("");
+  const [activeSellerId, setActiveSellerId] = useState(sellerId);
+  const [expandedSellerId, setExpandedSellerId] = useState(sellerId);
   const [centerView, setCenterView] = useState<"dashboard" | "negotiations">("dashboard");
   const [inventoryBySeller, setInventoryBySeller] = useState<Record<string, SellerInventoryProduct[]>>({});
   const [showAddModal, setShowAddModal] = useState(false);
@@ -88,37 +216,63 @@ export function SellerWorkspace({ onLogout, accountLabel = "Vendor Console", sel
   const [aiBrief, setAiBrief] = useState<string | null>(null);
   const [briefLoading, setBriefLoading] = useState(false);
 
-  // Fetch inventory for this seller only
+  // Fetch inventory — Supabase direct first (no backend needed), REST fallback
   useEffect(() => {
-    fetch(`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"}/api/inventory`)
-      .then((r) => r.json())
-      .then((data: { merchants?: any[] }) => {
-        const map: Record<string, SellerInventoryProduct[]> = {};
-        (data.merchants ?? [])
-          .filter((merchant: any) => merchant.seller_id === sellerId)
-          .forEach((merchant: any) => {
-            const products: SellerInventoryProduct[] = (merchant.inventories ?? []).flatMap((inv: any) =>
-              (inv.products ?? []).map((p: any): SellerInventoryProduct => ({
-                product_id: p.id ?? p.product_id ?? `${merchant.seller_id}-${p.product}`,
-                product: p.product,
-                category: p.category ?? "GPU",
-                price_eur: p.price_eur,
-                approximate_delivery_days: p.delivery_days ?? p.approximate_delivery_days ?? 0,
-                max_negotiation_percent: p.max_negotiation_percent ?? 5,
-                specifications: {
-                  length_mm: p.length_mm ?? 0,
-                  power_watts: p.power_watts ?? 0,
-                  warranty_years: p.warranty_years ?? 0,
-                  availability: (p.availability ?? "in_stock") as SellerInventoryProduct["specifications"]["availability"],
-                  compatibility_notes: p.compatibility_notes ?? "",
-                },
-              }))
-            );
-            map[merchant.seller_id] = products;
+    const rowToProduct = (p: any, sid: string): SellerInventoryProduct => ({
+      product_id: p.id ?? p.product_id ?? `${sid}-${p.product}`,
+      product: p.product,
+      category: p.category ?? "GPU",
+      price_eur: p.price_eur,
+      approximate_delivery_days: p.delivery_days ?? p.approximate_delivery_days ?? 0,
+      max_negotiation_percent: p.max_negotiation_percent ?? 5,
+      specifications: {
+        length_mm: p.length_mm ?? 0,
+        power_watts: p.power_watts ?? 0,
+        warranty_years: p.warranty_years ?? 0,
+        availability: (p.availability ?? "in_stock") as SellerInventoryProduct["specifications"]["availability"],
+        compatibility_notes: p.compatibility_notes ?? "",
+      },
+    });
+
+    const applyFlat = (rows: any[]) => {
+      const map: Record<string, SellerInventoryProduct[]> = {};
+      rows.forEach((p: any) => {
+        const sid = p.seller_id ?? "";
+        if (!map[sid]) map[sid] = [];
+        map[sid].push(rowToProduct(p, sid));
+      });
+      setInventoryBySeller(map);
+    };
+
+    const fetchFromRest = () => {
+      fetch(`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"}/api/inventory`)
+        .then((r) => r.json())
+        .then((data: { merchants?: any[] }) => {
+          const rows: any[] = [];
+          (data.merchants ?? []).forEach((merchant: any) => {
+            (merchant.inventories ?? []).forEach((inv: any) => {
+              (inv.products ?? []).forEach((p: any) => rows.push({ ...p, seller_id: merchant.seller_id }));
+            });
           });
-        setInventoryBySeller(map);
-      })
-      .catch(() => {});
+          applyFlat(rows);
+        })
+        .catch(() => {});
+    };
+
+    if (supabase) {
+      supabase
+        .from("seller_inventory")
+        .select("*")
+        .then(({ data }) => {
+          if (data && data.length > 0) {
+            applyFlat(data);
+          } else {
+            fetchFromRest();
+          }
+        });
+    } else {
+      fetchFromRest();
+    }
   }, [sellerId]);
 
   // Supabase Realtime: seed from most recent run, then subscribe for live updates.
@@ -128,17 +282,22 @@ export function SellerWorkspace({ onLogout, accountLabel = "Vendor Console", sel
 
     const applyResult = (result: DemoResult) => {
       setDemoResult(result);
-      // Only show this seller's data in the negotiation feed
-      const allSuppliers = result.matched_suppliers ?? [];
-      const mySuppliers = allSuppliers.filter((s) => s.seller_id === sellerId);
-      const suppliersToShow = mySuppliers.length > 0 ? mySuppliers : allSuppliers;
+      // Show ALL parallel supplier negotiations on the seller dashboard so the
+      // demo viewer can see the multi-supplier action, not just one chat.
+      const suppliersToShow = result.matched_suppliers ?? [];
       setSuppliers(suppliersToShow);
-      setLiveLogs((result.conversation_logs ?? []).filter((l) => l.seller_id === sellerId));
-      setLiveValidations((result.validation_results ?? []).filter((r) => r.seller_id === sellerId));
+      setLiveLogs(result.conversation_logs ?? []);
+      setLiveValidations(result.validation_results ?? []);
       const firstId = suppliersToShow[0]?.seller_id ?? "";
       setActiveSellerId((prev) => prev || firstId);
       setExpandedSellerId((prev) => prev || firstId);
     };
+
+    // Seed vendor_a immediately so the dashboard is never empty during the
+    // ~20s wait for a real run. Real Supabase/REST data overwrites on arrival.
+    if (sellerId === "vendor_a") {
+      applyResult(SEED_DEMO_RESULT_VENDOR_A);
+    }
 
     if (supabase) {
       supabase
@@ -247,7 +406,9 @@ export function SellerWorkspace({ onLogout, accountLabel = "Vendor Console", sel
     return [{ sellerId: activeSellerId, seller, logs, lastMsg: logs[logs.length - 1], roundCount, validation }];
   }, [negotiations, activeSellerId, suppliers, liveValidations]);
 
-  const totalProducts = suppliers.reduce((sum, s) => sum + (inventoryBySeller[s.seller_id]?.length ?? 0), 0);
+  const totalProducts = suppliers.length > 0
+    ? suppliers.reduce((sum, s) => sum + (inventoryBySeller[s.seller_id]?.length ?? 0), 0)
+    : (inventoryBySeller[sellerId]?.length ?? 0);
 
   const selectSeller = (id: string) => {
     setActiveSellerId(id);

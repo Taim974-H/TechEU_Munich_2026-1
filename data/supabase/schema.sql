@@ -68,3 +68,44 @@ create table if not exists tavily_fallback_results (
   data jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now()
 );
+
+-- ---------------------------------------------------------------------------
+-- Seller inventory products: extended catalog beyond the 34 curated demo
+-- rows, filtered by category in data_access.get_products_for_requirements().
+-- ---------------------------------------------------------------------------
+create table if not exists seller_inventory_products (
+  id text primary key,
+  seller_id text not null,
+  seller_name text,
+  product text not null,
+  category text,
+  price_eur numeric,
+  delivery_days integer,
+  warranty_years numeric,
+  availability text,
+  product_keywords text[],
+  length_mm numeric,
+  power_watts numeric,
+  data jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_seller_inventory_products_seller_id on seller_inventory_products (seller_id);
+create index if not exists idx_seller_inventory_products_category on seller_inventory_products (category);
+
+-- ---------------------------------------------------------------------------
+-- Demo sessions: completed DemoResult payloads written by the buyer flow and
+-- consumed by the seller Realtime dashboard. One row per session_id.
+-- ---------------------------------------------------------------------------
+create table if not exists demo_sessions (
+  id uuid primary key default gen_random_uuid(),
+  session_id text unique not null,
+  result jsonb not null,
+  created_at timestamptz default now()
+);
+
+create index if not exists idx_demo_sessions_created_at on demo_sessions (created_at desc);
+
+-- Enable Supabase Realtime for the seller dashboard subscription.
+-- Safe to re-run: adding a table that is already in the publication is a no-op.
+alter publication supabase_realtime add table demo_sessions;

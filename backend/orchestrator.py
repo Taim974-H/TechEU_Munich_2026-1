@@ -1,5 +1,7 @@
+import concurrent.futures
 import json
 import os
+import queue as _queue
 import time
 import uuid
 from dotenv import load_dotenv
@@ -8,13 +10,12 @@ from typing import Callable
 from backend.schemas import BuyerRequest, DemoResult
 from backend.agents.procurement_intelligence import extract_requirements, validate_offer, compute_value_score
 from backend.agents.supplier_matching import match_suppliers
-from backend.agents.product_clustering import cluster_products
+from backend.agents.product_clustering import cluster_products, select_top_products
 from backend.agents.judging_agent import judge_candidate
 from backend.agents.negotiation_agent import negotiate_one_supplier, _get_seller_best_product
-from backend.prompts import STRATEGY_OPTIONS
 from backend.agents.human_escalation import check_escalation
 from backend.agents.audit_summary import generate_summary
-from backend.data_access import get_all_products_flat, get_seller_inventory, get_products_for_requirements
+from backend.data_access import get_products_for_requirements, get_seller_registry
 from integrations.pioneer_client import classify_message
 from integrations.tavily_client import search_external_supplier
 from integrations.fal_client import generate_deal_card
@@ -91,7 +92,7 @@ def run_demo_events(
 
     # ── Stage: intel — clustering + judging ───────────────────────────────────
     all_products = get_products_for_requirements(structured_requirements, limit=200)
-    clusters = cluster_products(structured_requirements, all_products)
+    clusters = cluster_products(structured_requirements, all_products)[:5]  # cap at 5 clusters
 
     judged_candidates: list = []
     if not clusters:
@@ -109,15 +110,25 @@ def run_demo_events(
                 ),
             },
         )
-    for cluster in clusters:
-        candidate = judge_candidate(structured_requirements, cluster)
-        judged_candidates.append(candidate)
-        # Emit cluster event with judging verdict embedded so the feed shows
-        # both the cluster group and the Gemini verdict in one event.
-        yield evt("cluster", "intel", {**cluster, "judged_candidate": candidate})
+    if clusters:
+        # Run all cluster judgements in parallel, stream each verdict as soon
+        # as it returns so the UI doesn't wait for the slowest call.
+        candidates_by_cluster: dict[str, dict] = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(clusters)) as _jpool:
+            future_to_cluster = {
+                _jpool.submit(judge_candidate, structured_requirements, c): c
+                for c in clusters
+            }
+            for future in concurrent.futures.as_completed(future_to_cluster):
+                cluster = future_to_cluster[future]
+                candidate = future.result()
+                candidates_by_cluster[cluster["cluster_id"]] = candidate
+                yield evt("cluster", "intel", {**cluster, "judged_candidate": candidate})
+        # Preserve original cluster order in the final judged_candidates list
+        judged_candidates = [candidates_by_cluster[c["cluster_id"]] for c in clusters]
 
-    # ── Stage: match ──────────────────────────────────────────────────────────
-    matched_suppliers = match_suppliers(structured_requirements)
+    # ── Stage: match — cap at 3 suppliers for demo clarity ───────────────────
+    matched_suppliers = match_suppliers(structured_requirements, inventory=all_products)[:3]
     for supplier in matched_suppliers:
         yield evt("match", "match", supplier)
 
@@ -128,100 +139,187 @@ def run_demo_events(
     else:
         tavily_raw = fallback_tavily_result(structured_requirements) if demo_mode else {}
 
-    # ── Stage: strategy selection (human alert before negotiation) ────────────
-    yield evt("human_alert", "negotiate", {
-        "session_id": session_id,
-        "trigger": "strategy_selection",
-        "question": "Choose your negotiation strategy before the agent begins:",
-        "strategy_options": STRATEGY_OPTIONS,
-    })
-    if wait_for_human is not None:
-        strategy_resp = wait_for_human(session_id, {"trigger": "strategy_selection"})
-        strategy = strategy_resp.get("strategy") or "medium"
-    else:
-        strategy = "medium"
-
+    # ── Strategy: use Gemini-extracted or default to medium ──────────────────
+    strategy = structured_requirements.get("negotiation_strategy", "medium")
     if strategy not in ("aggressive", "medium", "light"):
         strategy = "medium"
-
     structured_requirements["negotiation_strategy"] = strategy
 
-    # Confirm strategy selection in the feed
-    yield evt("negotiation_turn", "negotiate", {
-        "seller_id": "",
-        "seller_name": "",
-        "speaker": "system",
-        "message": f"Negotiation strategy selected: {strategy.upper()}",
-        "round": 0,
-        "event_kind": "strategy_selected",
-        "pioneer_labels": [],
-        "risk_level": "low",
-        "extracted_fields": {},
+    # ── Stage: negotiate — top-3 product selection ────────────────────────────
+    # Pick the 3 best constraint-passing products (distinct sellers) by value score.
+    # This is the hard gate: only products that pass ALL buyer constraints enter
+    # negotiation. Falls back to cluster-gated suppliers if no products pass.
+    top_products = select_top_products(structured_requirements, all_products, n=3)
+
+    yield evt("top_candidates", "negotiate", {
+        "products": [
+            {
+                "seller_id": p.get("seller_id", ""),
+                "seller_name": p.get("seller_name", ""),
+                "product": p.get("product", ""),
+                "price_eur": p.get("price_eur", 0),
+                "delivery_days": p.get("delivery_days", 0),
+                "warranty_years": p.get("warranty_years", 0),
+                "score": compute_value_score(structured_requirements, p),
+            }
+            for p in top_products
+        ],
+        "message": (
+            f"{len(top_products)} constraint-passing product(s) selected for negotiation."
+            if top_products
+            else "No products passed all constraints — falling back to cluster-gated suppliers."
+        ),
     })
 
-    # ── Stage: negotiate — waterfall across ranked suppliers ──────────────────
-    # Gate on good/borderline clusters; negotiate rank-ordered, stop on first accept.
-    good_cluster_ids = {
-        jc["cluster_id"] for jc in judged_candidates
-        if jc.get("verdict") in ("good", "borderline")
-    }
-    good_seller_ids: set = set()
-    for cluster in clusters:
-        if cluster.get("cluster_id") in good_cluster_ids:
-            for p in cluster.get("products", []):
-                good_seller_ids.add(p.get("seller_id", ""))
+    if top_products:
+        supplier_map = {s["seller_id"]: s for s in matched_suppliers}
+        negotiation_suppliers_ranked = []
+        for p in top_products:
+            sid = p["seller_id"]
+            supplier = supplier_map.get(sid) or {
+                "seller_id": sid,
+                "seller_name": p.get("seller_name", sid),
+                "match_score": compute_value_score(structured_requirements, p) / 100.0,
+                "reason": "Top constraint-passing product",
+                "specialization": "",
+                "region": "",
+                "reliability_score": 0.5,
+                "negotiation_style": "standard",
+            }
+            negotiation_suppliers_ranked.append(supplier)
+    else:
+        # Fallback: cluster-gated suppliers ranked by match_score
+        good_cluster_ids = {
+            jc["cluster_id"] for jc in judged_candidates
+            if jc.get("verdict") in ("good", "borderline")
+        }
+        good_seller_ids: set = set()
+        for cluster in clusters:
+            if cluster.get("cluster_id") in good_cluster_ids:
+                for p in cluster.get("products", []):
+                    good_seller_ids.add(p.get("seller_id", ""))
+        fallback_suppliers = [s for s in matched_suppliers if s["seller_id"] in good_seller_ids]
+        if not fallback_suppliers:
+            fallback_suppliers = matched_suppliers
+        negotiation_suppliers_ranked = sorted(
+            fallback_suppliers, key=lambda s: s.get("match_score", 0), reverse=True
+        )
 
-    negotiation_suppliers = [s for s in matched_suppliers if s["seller_id"] in good_seller_ids]
-    if not negotiation_suppliers:
-        negotiation_suppliers = matched_suppliers
+    # ── Always spawn 3 chats: pad from registry if we have fewer ────────────
+    if len(negotiation_suppliers_ranked) < 3:
+        existing_ids = {s["seller_id"] for s in negotiation_suppliers_ranked}
+        matched_ids = {s["seller_id"] for s in matched_suppliers}
+        for reg in get_seller_registry():
+            if len(negotiation_suppliers_ranked) >= 3:
+                break
+            sid = reg.get("seller_id", "")
+            if sid in existing_ids:
+                continue
+            padded = {
+                "seller_id": sid,
+                "seller_name": reg.get("seller_name", sid),
+                "match_score": 0.4,
+                "reason": "Backup supplier — invited to bid",
+                "specialization": reg.get("specialization", ""),
+                "region": reg.get("region", ""),
+                "reliability_score": reg.get("reliability_score", 0.5),
+                "negotiation_style": reg.get("negotiation_style", "standard"),
+            }
+            negotiation_suppliers_ranked.append(padded)
+            existing_ids.add(sid)
+            # Make padded suppliers visible BOTH live (via match event) AND in
+            # the final DemoResult.matched_suppliers, otherwise the UI drops
+            # them the moment the done event fires.
+            if sid not in matched_ids:
+                matched_suppliers.append(padded)
+                matched_ids.add(sid)
+            yield evt("match", "match", padded)
+    negotiation_suppliers_ranked = negotiation_suppliers_ranked[:3]
 
-    negotiation_suppliers_ranked = sorted(
-        negotiation_suppliers, key=lambda s: s.get("match_score", 0), reverse=True
-    )
-
-    inventory_flat = get_seller_inventory()
+    inventory_flat = all_products
     conversation_logs: list = []
     raw_offers: list = []
-    rejected_sellers: list = []
     winning_offer = None
 
-    for idx, supplier in enumerate(negotiation_suppliers_ranked):
-        is_rejected = False
+    # ── Parallel negotiation: stream turns in real-time as all 3 run at once ──
+    supplier_by_id = {s["seller_id"]: s for s in negotiation_suppliers_ranked}
+    supplier_turns: dict[str, list] = {s["seller_id"]: [] for s in negotiation_suppliers_ranked}
+    supplier_final_offer: dict[str, dict | None] = {s["seller_id"]: None for s in negotiation_suppliers_ranked}
+    _turn_queue: _queue.Queue = _queue.Queue()
 
-        for log, offer in negotiate_one_supplier(
-            structured_requirements, supplier, inventory_flat, judged_candidates
-        ):
-            conversation_logs.append(log)
-            yield evt("negotiation_turn", "negotiate", dict(log))
-            if offer is not None:
-                raw_offers.append(offer)
-                winning_offer = offer
-            if log.get("event_kind") == "seller_rejection":
-                is_rejected = True
+    def _stream_negotiation(supplier: dict) -> None:
+        try:
+            for log, offer in negotiate_one_supplier(
+                structured_requirements, supplier, inventory_flat, judged_candidates
+            ):
+                _turn_queue.put(("turn", supplier["seller_id"], log, offer))
+        except Exception:
+            pass
+        _turn_queue.put(("done", supplier["seller_id"], None, None))
 
-        if is_rejected:
-            rejected_sellers.append(supplier["seller_id"])
-            next_idx = idx + 1
-            if next_idx < len(negotiation_suppliers_ranked):
-                next_sup = negotiation_suppliers_ranked[next_idx]
-                yield evt("negotiation_turn", "negotiate", {
-                    "seller_id": supplier["seller_id"],
-                    "seller_name": supplier["seller_name"],
-                    "speaker": "system",
-                    "message": (
-                        f"Negotiation rejected by {supplier['seller_name']}. "
-                        f"Routing to next supplier: {next_sup['seller_name']}."
-                    ),
-                    "round": 0,
-                    "event_kind": "supplier_fallback",
-                    "next_seller_id": next_sup["seller_id"],
-                    "next_seller_name": next_sup["seller_name"],
-                    "pioneer_labels": [],
-                    "risk_level": "high",
-                    "extracted_fields": {},
-                })
-        else:
-            break  # deal accepted — stop waterfall
+    negotiation_results: dict[str, dict] = {}
+    n_suppliers = len(negotiation_suppliers_ranked)
+    if n_suppliers > 0:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+            for s in negotiation_suppliers_ranked:
+                pool.submit(_stream_negotiation, s)
+            done_count = 0
+            # Per-turn pacing — mimic humans texting: ~2s avg with jitter so it
+            # never feels mechanical. Buyer messages get a slightly longer
+            # "typing" pause than seller replies.
+            import random as _random
+            while done_count < n_suppliers:
+                kind, sid, log, offer = _turn_queue.get()
+                if kind == "turn":
+                    conversation_logs.append(log)
+                    supplier_turns[sid].append(log)
+                    if offer is not None:
+                        supplier_final_offer[sid] = offer
+                    yield evt("negotiation_turn", "negotiate", dict(log))
+                    if log.get("speaker") == "buyer":
+                        time.sleep(_random.uniform(1.3, 2.7))
+                    else:
+                        time.sleep(_random.uniform(0.9, 2.1))
+                elif kind == "done":
+                    done_count += 1
+
+    for sid in supplier_by_id:
+        negotiation_results[sid] = {
+            "turns": supplier_turns.get(sid, []),
+            "offer": supplier_final_offer.get(sid),
+            "supplier": supplier_by_id[sid],
+        }
+        if supplier_final_offer.get(sid):
+            raw_offers.append(supplier_final_offer[sid])
+
+    # ── Auto-pick best non-rejected offer by value score ─────────────────────
+    valid_offers = [
+        (sid, data["offer"])
+        for sid, data in negotiation_results.items()
+        if data.get("offer") and not any(
+            t.get("event_kind") == "seller_rejection"
+            for t in data.get("turns", [])
+        )
+    ]
+    if valid_offers:
+        selected_seller_id = max(
+            valid_offers,
+            key=lambda x: compute_value_score(structured_requirements, x[1]),
+        )[0]
+    elif raw_offers:
+        selected_seller_id = max(
+            raw_offers,
+            key=lambda o: compute_value_score(structured_requirements, o),
+        ).get("seller_id", "")
+    else:
+        selected_seller_id = ""
+
+    winning_offer = next((o for o in raw_offers if o.get("seller_id") == selected_seller_id), None)
+
+    rejected_sellers = [
+        sid for sid, data in negotiation_results.items()
+        if any(t.get("event_kind") == "seller_rejection" for t in data.get("turns", []))
+    ]
 
     negotiation_outcome = {
         "status": "accepted" if winning_offer else "failed",
@@ -288,6 +386,15 @@ def run_demo_events(
     best_offer = next((o for o in raw_offers if best and o["seller_id"] == best["seller_id"]), None)
 
     escalation_result = check_escalation(validation_results, structured_requirements, best_offer)
+
+    # Always fire final approval so buyer can accept / reject / negotiate further
+    if not escalation_result.get("escalate"):
+        escalation_result["escalate"] = True
+        escalation_result["trigger"] = "approval_required"
+        escalation_result["reason"] = "Final buyer approval required."
+        escalation_result["question_for_human"] = (
+            "Review the negotiated offer and decide: approve, reject, or negotiate further."
+        )
 
     if escalation_result.get("escalate"):
         def _make_alert_payload(renegotiate_used: bool) -> dict:

@@ -22,6 +22,7 @@ from backend.data_access import (
     get_all_products_flat,
     get_buyer_scenarios,
     get_seller_inventory_nested,
+    prewarm_caches,
     write_demo_session,
 )
 from backend.hitl_sessions import close_session, create_session, submit_response, wait_for_response
@@ -51,6 +52,15 @@ _executor = ThreadPoolExecutor(max_workers=4)
 _latest_session: dict | None = None
 
 
+@app.on_event("startup")
+def _prewarm_on_startup() -> None:
+    """Pull Supabase data into memory at boot so the first buyer demo is fast."""
+    try:
+        _executor.submit(prewarm_caches)
+    except Exception:
+        pass
+
+
 def _store_latest(result: dict) -> None:
     global _latest_session
     _latest_session = result
@@ -65,11 +75,12 @@ class BuyerRequestIn(BaseModel):
 
 class HumanResponseIn(BaseModel):
     session_id: str
-    action: Optional[str] = None   # "approve" | "reject" | "adjust" | "select_strategy"
-    decision: Optional[str] = None  # frontend compatibility alias
+    action: Optional[str] = None          # "approve" | "reject" | "adjust" | "select_strategy"
+    decision: Optional[str] = None        # frontend compatibility alias
     note: Optional[str] = None
     adjusted_budget_eur: Optional[float] = None
-    strategy: Optional[str] = None  # "aggressive" | "medium" | "light" (strategy selection)
+    strategy: Optional[str] = None        # "aggressive" | "medium" | "light"
+    selected_seller_id: Optional[str] = None  # for select_best_offer HITL
 
 
 class FullAuditRequest(BaseModel):
@@ -283,6 +294,7 @@ async def human_response(body: HumanResponseIn) -> dict:
             "note": body.note or "",
             "adjusted_budget_eur": body.adjusted_budget_eur,
             "strategy": body.strategy,
+            "selected_seller_id": body.selected_seller_id or "",
             "ts": int(time.time() * 1000),
         },
     )

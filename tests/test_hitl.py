@@ -90,11 +90,10 @@ def test_run_demo_events_waits_at_human_alert(monkeypatch):
     }
 
     monkeypatch.setattr("backend.orchestrator.extract_requirements", lambda _request: requirements)
-    monkeypatch.setattr("backend.orchestrator.get_all_products_flat", lambda: [product])
+    monkeypatch.setattr("backend.orchestrator.get_products_for_requirements", lambda _req, limit=200: [product])
     monkeypatch.setattr("backend.orchestrator.cluster_products", lambda _req, _products: [cluster])
     monkeypatch.setattr("backend.orchestrator.judge_candidate", lambda _req, _cluster: candidate)
-    monkeypatch.setattr("backend.orchestrator.match_suppliers", lambda _req: [supplier])
-    monkeypatch.setattr("backend.orchestrator.get_seller_inventory", lambda: [product])
+    monkeypatch.setattr("backend.orchestrator.match_suppliers", lambda _req, inventory=None: [supplier])
     monkeypatch.setattr(
         "backend.orchestrator.negotiate_one_supplier",
         lambda _req, _supplier, _inventory, _judged: iter(
@@ -149,10 +148,6 @@ def test_run_demo_events_waits_at_human_alert(monkeypatch):
     def wait_for_human(session_id, alert):
         waited.append((session_id, alert["trigger"]))
         call_count[0] += 1
-        if alert["trigger"] == "strategy_selection":
-            # First alert: respond with strategy choice
-            return {"action": "select_strategy", "strategy": "medium"}
-        # Second alert: escalation approval
         return {"action": "approve", "note": "Approved from test"}
 
     events = list(
@@ -166,20 +161,14 @@ def test_run_demo_events_waits_at_human_alert(monkeypatch):
     types = [event["type"] for event in events]
     human_alert_indices = [i for i, t in enumerate(types) if t == "human_alert"]
 
-    # Two human_alert events: strategy_selection first, then approval_required
-    assert len(human_alert_indices) == 2
-    assert events[human_alert_indices[0]]["data"]["trigger"] == "strategy_selection"
-    assert events[human_alert_indices[1]]["data"]["trigger"] == "approval_required"
-
-    # Strategy alert comes before any negotiation turns
-    first_neg_idx = next((i for i, t in enumerate(types) if t == "negotiation_turn"), len(types))
-    assert human_alert_indices[0] < first_neg_idx
+    # One human_alert: approval_required at the end
+    assert len(human_alert_indices) == 1
+    assert events[human_alert_indices[0]]["data"]["trigger"] == "approval_required"
 
     # Approval alert comes before escalation
-    assert types.index("escalation") > human_alert_indices[1]
+    assert types.index("escalation") > human_alert_indices[0]
 
     assert waited == [
-        ("session-123", "strategy_selection"),
         ("session-123", "approval_required"),
     ]
 

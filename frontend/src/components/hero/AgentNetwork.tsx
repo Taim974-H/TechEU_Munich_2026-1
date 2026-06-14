@@ -40,6 +40,10 @@ interface Props {
   chatLines: Record<string, ConversationLog[]>;
   requestLabel?: string;
   judgedCandidates?: JudgedCandidate[];
+  showDecideButtons?: boolean;
+  onApproveSupplier?: (sellerId: string) => void;
+  onRejectSupplier?: (sellerId: string) => void;
+  onNegotiateSupplier?: (sellerId: string) => void;
 }
 
 const nodeTypes = {
@@ -75,6 +79,10 @@ export function AgentNetwork({
   chatLines,
   requestLabel = "New Request",
   judgedCandidates = [],
+  showDecideButtons = false,
+  onApproveSupplier,
+  onRejectSupplier,
+  onNegotiateSupplier,
 }: Props) {
   const { nodes, edges } = useMemo(() => {
     const orchActive = stageIndex >= 0 && stageIndex < 6;
@@ -225,6 +233,10 @@ export function AgentNetwork({
           selected: canInteract && s.seller_id === activeSeller,
           interactive: canInteract,
           chatLines: chatLines[s.seller_id] ?? [],
+          showDecideButtons: showDecideButtons && stageIndex >= 2,
+          onApprove: onApproveSupplier,
+          onReject: onRejectSupplier,
+          onNegotiate: onNegotiateSupplier,
         },
         draggable: false,
         selectable: false,

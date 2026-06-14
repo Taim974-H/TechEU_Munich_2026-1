@@ -753,7 +753,7 @@ feature/realtime-ui
 
 ### Phase 0 contracts (FROZEN — all committed as of Phase 0)
 
-1. ✅ Gemini client signature: `generate(prompt, system, temperature, json_mode) → str` — implemented in `integrations/gemini_client.py`, model `gemini-2.5-flash`
+1. ✅ Gemini client signature: `generate(prompt, system, temperature, json_mode) → str` — implemented in `integrations/gemini_client.py`, model `gemini-3.1-flash-lite`
 2. ✅ Nested inventory shape: `merchants[] → inventories[] → products[]` — JSON restructured in Phase 1
 3. ✅ SSE event envelope + frozen event types — documented in `docs/contracts.md` (see Section 8); endpoint live in Phase 1
 4. ✅ `DEMO_MODE` default flipped to `false` — live mode is now the default; `DEMO_MODE=true` is the replay/CTO safety net
@@ -902,7 +902,7 @@ The reviewer's core objection: everything is pre-written — the system reads fi
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| `integrations/gemini_client.py` | ✅ Complete (Phase 0) | `generate(prompt, *, system, temperature, json_mode) → str`. Model: `gemini-2.5-flash`. Retry once, graceful fallback. |
+| `integrations/gemini_client.py` | ✅ Complete (Phase 0) | `generate(prompt, *, system, temperature, json_mode) → str`. Model: `gemini-3.1-flash-lite`. Retry once, graceful fallback. |
 | `backend/schemas.py` | ✅ Updated (Phase 0) | Added `BuyerBlueprint`, `ProductCluster`, `JudgedCandidate`. `DemoResult` now includes `clusters[]` + `judged_candidates[]`. |
 | `data/buyer_scenarios.json` | ✅ Rebuilt (Phase 0) | Blueprints only — `structured_requirements` stripped; requirements extracted live. |
 | `docs/contracts.md` | ✅ Created (Phase 0) | All four Phase 0 contracts frozen in writing. |

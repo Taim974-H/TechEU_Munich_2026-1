@@ -237,6 +237,12 @@ export function BuyerWorkspace({ onLogout, accountLabel = "Horizon Analytics Gmb
         }
 
         if (log.event_kind === "renegotiation_start") {
+          // Pull camera + stage back to negotiation so the buyer can watch
+          // the new turns land in the winning seller's chat panel.
+          setStatus((s) => ({ ...s, stageIndex: 2 }));
+          if (log.seller_id) {
+            setVisibleNodeIds((prev) => new Set([...prev, "negotiation", log.seller_id]));
+          }
           pushFeed({
             id: `renegotiate-${Date.now()}`,
             agent: "orchestrator",
@@ -489,7 +495,10 @@ export function BuyerWorkspace({ onLogout, accountLabel = "Horizon Analytics Gmb
     }
     if (d === "renegotiate") {
       setEscalationAlert(null);
-      setStatus((s) => ({ ...s, phase: "running" }));
+      // Drop stage back to "negotiate" so the AgentNetwork camera refocuses
+      // on the seller chat panels — otherwise new turns silently append while
+      // the view is parked on Escalate.
+      setStatus((s) => ({ ...s, phase: "running", stageIndex: 2 }));
       const sid = sessionIdRef.current;
       if (sid) {
         try {
@@ -625,27 +634,30 @@ export function BuyerWorkspace({ onLogout, accountLabel = "Horizon Analytics Gmb
             </div>
           )}
 
-          <div className="flex min-h-0 flex-1">
-            <div className="flex-1 border-r border-border">
-              <AgentNetwork
-                stageIndex={status.stageIndex}
-                phase={heroPhase}
-                activeSeller={activeSeller}
-                onSelectSeller={setActiveSeller}
-                canInteract={showSection("negotiation")}
-                suppliers={result?.matched_suppliers ?? liveSuppliers}
-                visibleNodeIds={visibleNodeIds}
-                chatLines={nodeChatLines}
-                requestLabel={requestLabel}
-                judgedCandidates={result?.judged_candidates ?? liveJudgedCandidates}
-              />
-            </div>
+          <div className="flex min-h-0 flex-col flex-1">
+            <div className="flex min-h-0 flex-1">
+              <div className="flex-1 border-r border-border">
+                <AgentNetwork
+                  stageIndex={status.stageIndex}
+                  phase={heroPhase}
+                  activeSeller={activeSeller}
+                  onSelectSeller={setActiveSeller}
+                  canInteract={showSection("negotiation")}
+                  suppliers={result?.matched_suppliers ?? liveSuppliers}
+                  visibleNodeIds={visibleNodeIds}
+                  chatLines={nodeChatLines}
+                  requestLabel={requestLabel}
+                  judgedCandidates={result?.judged_candidates ?? liveJudgedCandidates}
+                />
+              </div>
 
-            <div className="flex w-72 shrink-0 flex-col bg-white">
-              <div className="min-h-0 flex-1">
-                <ActivityFeed items={feed} demoMode={result?.demo_mode} />
+              <div className="flex w-72 shrink-0 flex-col bg-white">
+                <div className="min-h-0 flex-1">
+                  <ActivityFeed items={feed} demoMode={result?.demo_mode} />
+                </div>
               </div>
             </div>
+
           </div>
 
           {/* Escalation modal — shown on approval_required alert */}

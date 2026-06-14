@@ -8,6 +8,7 @@ hardcoded GPU assumptions, so the system works for any product category.
 import math
 
 from backend.agents.product_utils import product_matches_requirement
+from backend.agents.procurement_intelligence import evaluate_constraints, compute_value_score
 
 _CLUSTER_THRESHOLD = 0.35
 
@@ -153,3 +154,33 @@ def cluster_products(requirements: dict, all_products: list[dict]) -> list[dict]
         })
 
     return result
+
+
+def select_top_products(requirements: dict, all_products: list[dict], n: int = 3) -> list[dict]:
+    """Return the top-n constraint-passing products ranked by value score.
+
+    Applies category match + all hard constraints as a hard gate, then scores
+    survivors by compute_value_score(). Returns at most n products, one per
+    seller, so the negotiation waterfall has diverse suppliers to try.
+    """
+    eligible = [
+        p for p in all_products
+        if product_matches_requirement(p, requirements)
+        and p.get("availability") != "out_of_stock"
+        and not evaluate_constraints(requirements, p)
+    ]
+
+    scored = sorted(eligible, key=lambda p: compute_value_score(requirements, p), reverse=True)
+
+    seen_sellers: set[str] = set()
+    top: list[dict] = []
+    for p in scored:
+        sid = p.get("seller_id", "")
+        if sid in seen_sellers:
+            continue
+        seen_sellers.add(sid)
+        top.append(p)
+        if len(top) >= n:
+            break
+
+    return top

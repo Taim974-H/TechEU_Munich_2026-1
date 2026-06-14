@@ -39,9 +39,10 @@ def _score_reason(compatible: list, requirements: dict) -> str:
     )
 
 
-def match_suppliers(requirements: dict) -> list:
+def match_suppliers(requirements: dict, inventory: list | None = None) -> list:
     # Pull only products relevant to this request (filtered by category, max 200)
-    inventory = get_products_for_requirements(requirements, limit=200)
+    if inventory is None:
+        inventory = get_products_for_requirements(requirements, limit=200)
 
     # Group products by seller_id
     by_seller: dict[str, list] = {}

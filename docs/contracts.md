@@ -21,7 +21,7 @@ def generate(
 
 - SDK: `google-genai` (installed via `requirements.txt`)
 - Env var: `LLM_API_KEY` (Gemini key) + `LLM_PROVIDER=gemini`
-- Default model: `gemini-2.5-flash`
+- Default model: `gemini-3.1-flash-lite`
 - Timeout behaviour: retries once after 1s; returns `"[LLM unavailable — using fallback response]"` on both failures
 - `json_mode=True` sets `response_mime_type="application/json"` — caller must parse the returned string as JSON
 - All Phase 1/2 agents call this; no agent imports the SDK directly
