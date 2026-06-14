@@ -44,10 +44,8 @@ def generate(
     if not api_key or genai is None or types is None:
         return _FALLBACK
 
-    # Disable thinking for speed — saves 30-90s per call in demo context
     config: dict = {
         "temperature": temperature,
-        "thinking_config": types.ThinkingConfig(thinking_budget=0),
     }
     if system:
         config["system_instruction"] = system
