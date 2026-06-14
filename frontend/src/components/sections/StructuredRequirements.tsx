@@ -11,8 +11,8 @@ export function StructuredRequirementsSection({ data }: Props) {
   const entries: { key: string; value: string }[] = [
     { key: "product_type", value: data.product_type },
     { key: "use_case", value: data.use_case },
-    { key: "max_length_mm", value: `${data.max_length_mm}` },
-    { key: "max_power_watts", value: `${data.max_power_watts}` },
+    { key: "max_length_mm", value: optionalValue(data.max_length_mm) },
+    { key: "max_power_watts", value: optionalValue(data.max_power_watts) },
     { key: "budget_eur", value: `€${data.budget_eur}` },
     { key: "max_delivery_days", value: `${data.max_delivery_days}d` },
     { key: "warranty_required", value: data.warranty_required ? "true" : "false" },
@@ -44,4 +44,8 @@ export function StructuredRequirementsSection({ data }: Props) {
       </div>
     </div>
   );
+}
+
+function optionalValue(value: number | undefined): string {
+  return typeof value === "number" && value > 0 ? `${value}` : "not specified";
 }

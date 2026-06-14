@@ -193,7 +193,23 @@ def run_demo_events(
     escalation_result = check_escalation(validation_results, structured_requirements, best_offer)
 
     if escalation_result.get("escalate"):
-        yield evt("human_alert", "escalate", escalation_result)
+        alert_payload = {
+            "session_id": session_id,
+            "question": escalation_result.get("question_for_human", ""),
+            "trigger": escalation_result.get("trigger", ""),
+            "best_offer": (
+                {
+                    "seller_name": best_offer.get("seller_name", ""),
+                    "product": best_offer.get("product", ""),
+                    "price_eur": best_offer.get("price_eur", 0),
+                    "delivery_days": best_offer.get("delivery_days", 0),
+                }
+                if best_offer
+                else None
+            ),
+            "budget_eur": structured_requirements.get("budget_eur", 0),
+        }
+        yield evt("human_alert", "escalate", alert_payload)
         if wait_for_human is not None:
             human_response = wait_for_human(session_id, escalation_result)
         else:
@@ -202,7 +218,8 @@ def run_demo_events(
                 "note": "Non-streaming run auto-continued after escalation alert.",
             }
         escalation_result["human_response"] = human_response
-        yield evt("escalation", "escalate", human_response)
+        escalation_result["human_decision"] = human_response.get("action")
+        yield evt("escalation", "escalate", escalation_result)
 
     # ── Recommendation ────────────────────────────────────────────────────────
     if best_offer:
@@ -224,6 +241,7 @@ def run_demo_events(
             "reason": final_reason,
             "human_approval_required": escalation_result.get("escalate", True),
             "human_response": escalation_result.get("human_response"),
+            "human_decision": escalation_result.get("human_decision"),
         }
     else:
         product_type = structured_requirements.get("product_type", "requested product")
@@ -241,6 +259,7 @@ def run_demo_events(
             ),
             "human_approval_required": True,
             "human_response": escalation_result.get("human_response"),
+            "human_decision": escalation_result.get("human_decision"),
         }
 
     yield evt("recommendation", "recommend", final_recommendation)

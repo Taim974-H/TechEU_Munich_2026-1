@@ -33,6 +33,7 @@ import type {
   HumanResponse,
   JudgedCandidate,
   MatchedSupplier,
+  ProductCluster,
   StreamEvent,
   ValidationResult,
 } from "@/lib/types";
@@ -131,6 +132,10 @@ function decisionFromRecommendation(
 ): "approved" | "rejected" | null {
   if (rec.human_decision === "approve" || rec.human_decision === "adjust") return "approved";
   if (rec.human_decision === "reject") return "rejected";
+  if (rec.human_response?.action === "approve" || rec.human_response?.action === "adjust") {
+    return "approved";
+  }
+  if (rec.human_response?.action === "reject") return "rejected";
   return null;
 }
 
@@ -182,21 +187,59 @@ export default function Page() {
 
       switch (evt.type) {
         case "requirements": {
-          const data = evt.data as DemoResult["structured_requirements"];
-          setResult((r) => (r ? { ...r, structured_requirements: data } : r));
+          const data = evt.data as Partial<DemoResult["structured_requirements"]> & {
+            status?: string;
+            message?: string;
+          };
+          if (!data.product_type) {
+            pushFeed({
+              id: `requirements-status-${evt.ts}`,
+              agent: "gemini",
+              title: data.message ?? "Extracting structured requirements",
+            });
+            break;
+          }
+          const requirements = data as DemoResult["structured_requirements"];
+          setResult((r) => (r ? { ...r, structured_requirements: requirements } : r));
           reveal(["requirements"]);
           pushFeed({
             id: `requirements-${evt.ts}`,
             agent: "orchestrator",
             title: "Extracted structured requirements",
-            detail: `budget €${data.budget_eur} · max ${data.max_length_mm}mm · ${data.max_delivery_days}d delivery`,
+            detail: [
+              data.budget_eur ? `budget €${data.budget_eur}` : null,
+              data.max_length_mm ? `max ${data.max_length_mm}mm` : null,
+              data.max_delivery_days ? `${data.max_delivery_days}d delivery` : null,
+            ]
+              .filter(Boolean)
+              .join(" · "),
           });
           break;
         }
 
         case "cluster": {
-          const data = evt.data as { judged_candidate: JudgedCandidate };
+          const data = evt.data as ProductCluster & {
+            judged_candidate?: JudgedCandidate;
+            message?: string;
+          };
           const candidate = data.judged_candidate;
+          setResult((r) =>
+            r && data.cluster_id
+              ? {
+                  ...r,
+                  clusters: upsertBy(r.clusters, data, (x) => x.cluster_id),
+                }
+              : r,
+          );
+          if (!candidate) {
+            pushFeed({
+              id: `cluster-${evt.ts}-${data.cluster_id ?? "status"}`,
+              agent: "clustering",
+              title: "Product clustering complete",
+              detail: data.message ?? `${data.products?.length ?? 0} products grouped`,
+            });
+            break;
+          }
           setResult((r) =>
             r ? { ...r, judged_candidates: [...r.judged_candidates, candidate] } : r,
           );
@@ -284,7 +327,17 @@ export default function Page() {
         }
 
         case "human_alert": {
-          const data = evt.data as HumanAlertData;
+          const raw = evt.data as Partial<HumanAlertData> & {
+            question_for_human?: string;
+            reason?: string;
+          };
+          const data: HumanAlertData = {
+            session_id: raw.session_id ?? evt.session_id ?? "",
+            question: raw.question ?? raw.question_for_human ?? raw.reason ?? "Human review requested.",
+            trigger: raw.trigger ?? "",
+            best_offer: raw.best_offer ?? null,
+            budget_eur: raw.budget_eur ?? 0,
+          };
           setPendingAlert(data);
           setStatus((s) => ({ ...s, phase: "awaiting_approval" }));
           pushFeed({
@@ -326,7 +379,10 @@ export default function Page() {
         }
 
         case "audit": {
-          const data = evt.data as string;
+          const data =
+            typeof evt.data === "string"
+              ? evt.data
+              : ((evt.data as { text?: string }).text ?? "");
           setResult((r) => (r ? { ...r, audit_summary: data } : r));
           reveal(["audit"]);
           pushFeed({

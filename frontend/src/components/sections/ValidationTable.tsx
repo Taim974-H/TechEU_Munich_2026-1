@@ -105,8 +105,14 @@ function Row({
       >
         <td className="py-3 pr-4 font-medium text-text-1">{r.seller_name}</td>
         <td className="py-3 pr-4 text-text-2">{r.product}</td>
-        <Spec value={`${r.length_mm}mm`} fail={r.length_mm > requirements.max_length_mm} />
-        <Spec value={`${r.power_watts}W`} fail={r.power_watts > requirements.max_power_watts} />
+        <Spec
+          value={formatOptionalSpec(r.length_mm, "mm")}
+          fail={exceedsLimit(r.length_mm, requirements.max_length_mm)}
+        />
+        <Spec
+          value={formatOptionalSpec(r.power_watts, "W")}
+          fail={exceedsLimit(r.power_watts, requirements.max_power_watts)}
+        />
         <Spec value={`€${r.price_eur}`} fail={r.price_eur > requirements.budget_eur} />
         <Spec value={`${r.delivery_days}d`} fail={r.delivery_days > requirements.max_delivery_days} />
         <Spec
@@ -159,6 +165,14 @@ function Spec({ value, fail }: { value: string; fail: boolean }) {
   );
 }
 
+function exceedsLimit(actual?: number, limit?: number): boolean {
+  return typeof actual === "number" && typeof limit === "number" && actual > limit;
+}
+
+function formatOptionalSpec(value: number | undefined, unit: string): string {
+  return typeof value === "number" && value > 0 ? `${value}${unit}` : "n/a";
+}
+
 function FailedDrawer({
   r,
   requirements,
@@ -169,15 +183,21 @@ function FailedDrawer({
   const checks = [
     {
       label: "Length",
-      actual: `${r.length_mm}mm`,
-      limit: `≤ ${requirements.max_length_mm}mm`,
-      fail: r.length_mm > requirements.max_length_mm,
+      actual: formatOptionalSpec(r.length_mm, "mm"),
+      limit:
+        typeof requirements.max_length_mm === "number"
+          ? `≤ ${requirements.max_length_mm}mm`
+          : "not specified",
+      fail: exceedsLimit(r.length_mm, requirements.max_length_mm),
     },
     {
       label: "Power draw",
-      actual: `${r.power_watts}W`,
-      limit: `≤ ${requirements.max_power_watts}W`,
-      fail: r.power_watts > requirements.max_power_watts,
+      actual: formatOptionalSpec(r.power_watts, "W"),
+      limit:
+        typeof requirements.max_power_watts === "number"
+          ? `≤ ${requirements.max_power_watts}W`
+          : "not specified",
+      fail: exceedsLimit(r.power_watts, requirements.max_power_watts),
     },
     {
       label: "Price",

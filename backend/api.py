@@ -16,7 +16,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from backend.data_access import get_buyer_scenarios, get_seller_inventory_nested
+from backend.data_access import (
+    get_all_products_flat,
+    get_buyer_scenarios,
+    get_seller_inventory_nested,
+)
 from backend.hitl_sessions import close_session, create_session, submit_response, wait_for_response
 from backend.orchestrator import DEMO_MODE, run_demo, run_demo_events
 
@@ -24,7 +28,14 @@ app = FastAPI(title="Pactum API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://localhost:3002",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
+        "http://127.0.0.1:3002",
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -41,8 +52,10 @@ class BuyerRequestIn(BaseModel):
 
 class HumanResponseIn(BaseModel):
     session_id: str
-    action: str  # "approve" | "reject" | "adjust"
+    action: Optional[str] = None  # "approve" | "reject" | "adjust"
+    decision: Optional[str] = None  # frontend compatibility alias
     note: Optional[str] = None
+    adjusted_budget_eur: Optional[float] = None
 
 
 def _adapt_tavily(tavily_raw: dict) -> dict:
@@ -69,6 +82,12 @@ def scenarios() -> list:
 @app.get("/api/inventory")
 def inventory() -> dict:
     return get_seller_inventory_nested()
+
+
+@app.get("/api/seller-inventory")
+def seller_inventory() -> list:
+    """Flat inventory endpoint used by the current Next.js inventory view."""
+    return get_all_products_flat()
 
 
 @app.get("/api/config")
@@ -148,11 +167,13 @@ async def run_demo_stream(
 @app.post("/api/human-response")
 async def human_response(body: HumanResponseIn) -> dict:
     """Mid-flow human decision endpoint."""
+    action = body.action or body.decision or "approve"
     accepted = submit_response(
         body.session_id,
         {
-            "action": body.action,
+            "action": action,
             "note": body.note or "",
+            "adjusted_budget_eur": body.adjusted_budget_eur,
             "ts": int(time.time() * 1000),
         },
     )

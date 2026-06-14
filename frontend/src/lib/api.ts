@@ -37,5 +37,26 @@ export async function getSellerInventory(): Promise<SellerProduct[]> {
   if (!res.ok) {
     throw new Error(`seller-inventory failed: ${res.status} ${res.statusText}`);
   }
-  return res.json();
+  const data = await res.json();
+  return Array.isArray(data) ? data : flattenNestedInventory(data);
+}
+
+function flattenNestedInventory(data: unknown): SellerProduct[] {
+  if (!data || typeof data !== "object" || !("merchants" in data)) return [];
+  const merchants = (data as { merchants?: unknown[] }).merchants ?? [];
+  return merchants.flatMap((merchant) => {
+    if (!merchant || typeof merchant !== "object") return [];
+    const m = merchant as {
+      seller_id?: string;
+      seller_name?: string;
+      inventories?: { products?: SellerProduct[] }[];
+    };
+    return (m.inventories ?? []).flatMap((inventory) =>
+      (inventory.products ?? []).map((product) => ({
+        ...product,
+        seller_id: m.seller_id ?? product.seller_id,
+        seller_name: m.seller_name ?? product.seller_name,
+      })),
+    );
+  });
 }

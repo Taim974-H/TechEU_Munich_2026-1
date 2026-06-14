@@ -27,13 +27,21 @@ export interface BuyerRequest {
 
 export interface StructuredRequirements {
   product_type: string;
+  product_keywords?: string[];
   use_case: string;
-  max_length_mm: number;
-  max_power_watts: number;
+  max_length_mm?: number;
+  max_power_watts?: number;
   budget_eur: number;
   max_delivery_days: number;
   warranty_required: boolean;
   minimum_warranty_years: number;
+  extra_constraints?: {
+    field: string;
+    label: string;
+    operator: "<=" | ">=" | string;
+    limit: number;
+    unit: string;
+  }[];
 }
 
 export interface MatchedSupplier {
@@ -96,6 +104,11 @@ export interface FinalRecommendation {
   reason: string;
   human_approval_required: boolean;
   human_decision?: "approve" | "reject" | "adjust" | null;
+  human_response?: {
+    action?: "approve" | "reject" | "adjust" | "auto_continue" | string;
+    note?: string;
+    adjusted_budget_eur?: number | null;
+  } | null;
 }
 
 export interface ProductCluster {
@@ -119,8 +132,8 @@ export interface SellerProduct {
   seller_id: string;
   seller_name: string;
   product: string;
-  length_mm: number;
-  power_watts: number;
+  length_mm?: number;
+  power_watts?: number;
   price_eur: number;
   delivery_days: number;
   warranty_years: number;

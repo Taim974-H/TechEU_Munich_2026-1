@@ -53,6 +53,7 @@ export async function sendHumanResponse(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       session_id: sessionId,
+      action: decision,
       decision,
       adjusted_budget_eur: adjustedBudgetEur ?? null,
     }),
