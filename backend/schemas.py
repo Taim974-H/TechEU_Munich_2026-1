@@ -34,6 +34,8 @@ class StructuredRequirements(TypedDict, total=False):
     # GPU / physical hardware only (absent for non-GPU requests)
     max_length_mm: int
     max_power_watts: int
+    # Set after strategy selection human alert
+    negotiation_strategy: str  # "aggressive" | "medium" | "light"
 
 
 class SellerOffer(TypedDict):
@@ -73,9 +75,11 @@ class PioneerInferenceResult(TypedDict):
 
 class ConversationLogItem(TypedDict):
     seller_id: str
-    speaker: str  # buyer | seller
+    speaker: str  # buyer | seller | system
     message: str
     round: int
+    event_kind: str  # "turn" | "seller_rejection" | "supplier_fallback" | "strategy_selected"
+    is_rejection: bool
     pioneer_labels: list
     risk_level: str
 
@@ -141,3 +145,5 @@ class DemoResult(TypedDict):
     final_recommendation: dict
     deal_card_path: str
     demo_mode: bool
+    negotiation_strategy: str   # "aggressive" | "medium" | "light"
+    negotiation_outcome: dict   # {status, strategy, winning_seller_id, rejected_sellers}

@@ -10,10 +10,11 @@ from backend.agents.procurement_intelligence import extract_requirements, valida
 from backend.agents.supplier_matching import match_suppliers
 from backend.agents.product_clustering import cluster_products
 from backend.agents.judging_agent import judge_candidate
-from backend.agents.negotiation_agent import run_negotiation_stream
+from backend.agents.negotiation_agent import negotiate_one_supplier
+from backend.prompts import STRATEGY_OPTIONS
 from backend.agents.human_escalation import check_escalation
 from backend.agents.audit_summary import generate_summary
-from backend.data_access import get_all_products_flat
+from backend.data_access import get_all_products_flat, get_seller_inventory
 from integrations.pioneer_client import classify_message
 from integrations.tavily_client import search_external_supplier
 from integrations.fal_client import generate_deal_card
@@ -125,9 +126,39 @@ def run_demo_events(
     else:
         tavily_raw = fallback_tavily_result(structured_requirements) if demo_mode else {}
 
-    # ── Stage: negotiate — gate on good/borderline clusters ───────────────────
-    # Only negotiate with suppliers whose products appear in good/borderline clusters.
-    # This bounds live Gemini calls (~2-4 suppliers × 2-4 turns vs all 5+ suppliers).
+    # ── Stage: strategy selection (human alert before negotiation) ────────────
+    yield evt("human_alert", "negotiate", {
+        "session_id": session_id,
+        "trigger": "strategy_selection",
+        "question": "Choose your negotiation strategy before the agent begins:",
+        "strategy_options": STRATEGY_OPTIONS,
+    })
+    if wait_for_human is not None:
+        strategy_resp = wait_for_human(session_id, {"trigger": "strategy_selection"})
+        strategy = strategy_resp.get("strategy") or "medium"
+    else:
+        strategy = "medium"
+
+    if strategy not in ("aggressive", "medium", "light"):
+        strategy = "medium"
+
+    structured_requirements["negotiation_strategy"] = strategy
+
+    # Confirm strategy selection in the feed
+    yield evt("negotiation_turn", "negotiate", {
+        "seller_id": "",
+        "seller_name": "",
+        "speaker": "system",
+        "message": f"Negotiation strategy selected: {strategy.upper()}",
+        "round": 0,
+        "event_kind": "strategy_selected",
+        "pioneer_labels": [],
+        "risk_level": "low",
+        "extracted_fields": {},
+    })
+
+    # ── Stage: negotiate — waterfall across ranked suppliers ──────────────────
+    # Gate on good/borderline clusters; negotiate rank-ordered, stop on first accept.
     good_cluster_ids = {
         jc["cluster_id"] for jc in judged_candidates
         if jc.get("verdict") in ("good", "borderline")
@@ -140,16 +171,62 @@ def run_demo_events(
 
     negotiation_suppliers = [s for s in matched_suppliers if s["seller_id"] in good_seller_ids]
     if not negotiation_suppliers:
-        negotiation_suppliers = matched_suppliers  # fallback: never skip all suppliers
+        negotiation_suppliers = matched_suppliers
 
+    negotiation_suppliers_ranked = sorted(
+        negotiation_suppliers, key=lambda s: s.get("match_score", 0), reverse=True
+    )
+
+    inventory_flat = get_seller_inventory()
     conversation_logs: list = []
     raw_offers: list = []
+    rejected_sellers: list = []
+    winning_offer = None
 
-    for log, offer in run_negotiation_stream(structured_requirements, negotiation_suppliers, judged_candidates):
-        conversation_logs.append(log)
-        yield evt("negotiation_turn", "negotiate", dict(log))
-        if offer is not None:
-            raw_offers.append(offer)
+    for idx, supplier in enumerate(negotiation_suppliers_ranked):
+        is_rejected = False
+
+        for log, offer in negotiate_one_supplier(
+            structured_requirements, supplier, inventory_flat, judged_candidates
+        ):
+            conversation_logs.append(log)
+            yield evt("negotiation_turn", "negotiate", dict(log))
+            if offer is not None:
+                raw_offers.append(offer)
+                winning_offer = offer
+            if log.get("event_kind") == "seller_rejection":
+                is_rejected = True
+
+        if is_rejected:
+            rejected_sellers.append(supplier["seller_id"])
+            next_idx = idx + 1
+            if next_idx < len(negotiation_suppliers_ranked):
+                next_sup = negotiation_suppliers_ranked[next_idx]
+                yield evt("negotiation_turn", "negotiate", {
+                    "seller_id": supplier["seller_id"],
+                    "seller_name": supplier["seller_name"],
+                    "speaker": "system",
+                    "message": (
+                        f"Negotiation rejected by {supplier['seller_name']}. "
+                        f"Routing to next supplier: {next_sup['seller_name']}."
+                    ),
+                    "round": 0,
+                    "event_kind": "supplier_fallback",
+                    "next_seller_id": next_sup["seller_id"],
+                    "next_seller_name": next_sup["seller_name"],
+                    "pioneer_labels": [],
+                    "risk_level": "high",
+                    "extracted_fields": {},
+                })
+        else:
+            break  # deal accepted — stop waterfall
+
+    negotiation_outcome = {
+        "status": "accepted" if winning_offer else "failed",
+        "strategy": strategy,
+        "winning_seller_id": winning_offer.get("seller_id", "") if winning_offer else "",
+        "rejected_sellers": rejected_sellers,
+    }
 
     # Pioneer labeling on seller turns (mutates logs in place for the done event)
     pioneer_labels: list = []
@@ -245,6 +322,17 @@ def run_demo_events(
         }
     else:
         product_type = structured_requirements.get("product_type", "requested product")
+        if rejected_sellers:
+            no_deal_reason = (
+                f"All {len(rejected_sellers)} supplier(s) rejected the negotiation under the "
+                f"{strategy.upper()} strategy — the requested discount exceeded the 10% seller floor. "
+                f"Try MEDIUM or LIGHT strategy, or raise the budget."
+            )
+        else:
+            no_deal_reason = (
+                f"No internal supplier offer matched the requested product category "
+                f"({product_type}). Use external supplier discovery or add matching inventory."
+            )
         final_recommendation = {
             "recommended_seller": "",
             "recommended_product": "",
@@ -253,10 +341,7 @@ def run_demo_events(
             "warranty_years": 0,
             "technical_status": "rejected",
             "risk_level": "high",
-            "reason": (
-                f"No internal supplier offer matched the requested product category "
-                f"({product_type}). Use external supplier discovery or add matching inventory."
-            ),
+            "reason": no_deal_reason,
             "human_approval_required": True,
             "human_response": escalation_result.get("human_response"),
             "human_decision": escalation_result.get("human_decision"),
@@ -295,6 +380,8 @@ def run_demo_events(
         "deal_card_path": deal_card_path,
         "demo_mode": demo_mode,
         "session_id": session_id,
+        "negotiation_strategy": strategy,
+        "negotiation_outcome": negotiation_outcome,
     }
     yield evt("done", "done", demo_result)
 

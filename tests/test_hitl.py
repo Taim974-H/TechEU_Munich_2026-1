@@ -8,6 +8,7 @@ from backend.hitl_sessions import (
     wait_for_response,
 )
 from backend.orchestrator import _normalize_request, run_demo_events
+from backend.agents.negotiation_agent import STRATEGY_CONFIG, SELLER_MAX_DISCOUNT_PCT
 
 
 def test_custom_prompt_request_gets_generated_request_id():
@@ -93,9 +94,10 @@ def test_run_demo_events_waits_at_human_alert(monkeypatch):
     monkeypatch.setattr("backend.orchestrator.cluster_products", lambda _req, _products: [cluster])
     monkeypatch.setattr("backend.orchestrator.judge_candidate", lambda _req, _cluster: candidate)
     monkeypatch.setattr("backend.orchestrator.match_suppliers", lambda _req: [supplier])
+    monkeypatch.setattr("backend.orchestrator.get_seller_inventory", lambda: [product])
     monkeypatch.setattr(
-        "backend.orchestrator.run_negotiation_stream",
-        lambda _req, _suppliers, _judged: iter(
+        "backend.orchestrator.negotiate_one_supplier",
+        lambda _req, _supplier, _inventory, _judged: iter(
             [
                 (
                     {
@@ -104,6 +106,7 @@ def test_run_demo_events_waits_at_human_alert(monkeypatch):
                         "speaker": "seller",
                         "message": "We can offer the Ergo Chair.",
                         "round": 1,
+                        "event_kind": "turn",
                         "pioneer_labels": [],
                         "risk_level": "low",
                         "extracted_fields": {},
@@ -141,9 +144,15 @@ def test_run_demo_events_waits_at_human_alert(monkeypatch):
     monkeypatch.setattr("backend.orchestrator.generate_deal_card", lambda _rec: "assets/fal_deal_card.png")
 
     waited = []
+    call_count = [0]
 
     def wait_for_human(session_id, alert):
         waited.append((session_id, alert["trigger"]))
+        call_count[0] += 1
+        if alert["trigger"] == "strategy_selection":
+            # First alert: respond with strategy choice
+            return {"action": "select_strategy", "strategy": "medium"}
+        # Second alert: escalation approval
         return {"action": "approve", "note": "Approved from test"}
 
     events = list(
@@ -155,8 +164,27 @@ def test_run_demo_events_waits_at_human_alert(monkeypatch):
     )
 
     types = [event["type"] for event in events]
-    assert waited == [("session-123", "approval_required")]
-    assert types.index("human_alert") < types.index("escalation")
+    human_alert_indices = [i for i, t in enumerate(types) if t == "human_alert"]
+
+    # Two human_alert events: strategy_selection first, then approval_required
+    assert len(human_alert_indices) == 2
+    assert events[human_alert_indices[0]]["data"]["trigger"] == "strategy_selection"
+    assert events[human_alert_indices[1]]["data"]["trigger"] == "approval_required"
+
+    # Strategy alert comes before any negotiation turns
+    first_neg_idx = next((i for i, t in enumerate(types) if t == "negotiation_turn"), len(types))
+    assert human_alert_indices[0] < first_neg_idx
+
+    # Approval alert comes before escalation
+    assert types.index("escalation") > human_alert_indices[1]
+
+    assert waited == [
+        ("session-123", "strategy_selection"),
+        ("session-123", "approval_required"),
+    ]
+
     done = events[-1]["data"]
     assert done["escalation_result"]["human_response"]["action"] == "approve"
     assert done["final_recommendation"]["human_response"]["note"] == "Approved from test"
+    assert done["negotiation_strategy"] == "medium"
+    assert done["negotiation_outcome"]["status"] == "accepted"

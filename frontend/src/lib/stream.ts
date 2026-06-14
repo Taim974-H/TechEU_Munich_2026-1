@@ -1,4 +1,4 @@
-import type { BuyerRequest, HumanResponseDecision, StreamEvent } from "./types";
+import type { BuyerRequest, HumanResponseDecision, NegotiationStrategy, StreamEvent } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -41,6 +41,24 @@ export function streamDemo(
   };
 
   return () => source.close();
+}
+
+export async function sendStrategyChoice(
+  sessionId: string,
+  strategy: NegotiationStrategy,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/human-response`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      session_id: sessionId,
+      action: "select_strategy",
+      strategy,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`strategy-choice failed: ${res.status} ${res.statusText}`);
+  }
 }
 
 export async function sendHumanResponse(

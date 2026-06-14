@@ -69,14 +69,14 @@ function SupplierCard({
 
       {/* Meta rows */}
       <div className="mt-3 grid grid-cols-1 gap-1 text-[11px] text-text-2">
-        <Row icon={<MapPin className="h-3 w-3" />} value={supplier.region} />
+        <Row icon={<MapPin className="h-3 w-3" />} value={supplier.region ?? "—"} />
         <Row
           icon={<ChartBar className="h-3 w-3" />}
-          value={`reliability ${supplier.reliability_score.toFixed(2)}`}
+          value={`reliability ${(supplier.reliability_score ?? 0).toFixed(2)}`}
         />
         <Row
           icon={<Handshake className="h-3 w-3" />}
-          value={supplier.negotiation_style}
+          value={supplier.negotiation_style ?? "—"}
         />
       </div>
 

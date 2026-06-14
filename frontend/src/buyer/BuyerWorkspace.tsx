@@ -16,27 +16,30 @@ import { AgentNetwork } from "@/components/hero/AgentNetwork";
 import { RequestForm } from "@/components/input/RequestForm";
 import { ActivityFeed, type FeedItem } from "@/components/feed/ActivityFeed";
 import { EscalationModal } from "@/components/modals/EscalationModal";
+import { StrategyModal } from "@/components/modals/StrategyModal";
 import { DecisionScreen } from "@/components/screens/DecisionScreen";
 import {
   initialStatus,
-  STAGE_DURATION_MS,
   STAGE_REVEALS,
   STAGES,
   type DemoStatus,
   type SectionId,
 } from "@/lib/demoMachine";
-import { runDemo } from "@/lib/api";
-import type { ConversationLog, DemoResult } from "@/lib/types";
+import { streamDemo, sendStrategyChoice, sendHumanResponse } from "@/lib/stream";
+import type {
+  ConversationLog,
+  DemoResult,
+  EscalationResult,
+  HumanAlertData,
+  NegotiationStrategy,
+  StrategyOption,
+  StreamEvent,
+} from "@/lib/types";
 
 interface BuyerWorkspaceProps {
   onLogout: () => void;
   accountLabel?: string;
 }
-
-// Negotiate stage animation timing
-const SELLER_SPAWN_INTERVAL = 220; // ms between each seller node appearing
-const CHAT_START_DELAY = 450;      // ms after last seller before first chat message
-const CHAT_INTERVAL = 520;         // ms between each chat message
 
 export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: BuyerWorkspaceProps) {
   const [step, setStep] = useState<1 | 2 | 3>(1);
@@ -50,20 +53,17 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
   const [result, setResult] = useState<DemoResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Dynamic node visibility — empty on start, nodes spawn progressively
+  // Streaming-specific state
+  const [strategyAlert, setStrategyAlert] = useState<{ session_id: string; options: StrategyOption[] } | null>(null);
+  const [escalationAlert, setEscalationAlert] = useState<EscalationResult | null>(null);
+
+  // Dynamic node visibility driven by real events
   const [visibleNodeIds, setVisibleNodeIds] = useState<Set<string>>(new Set());
-  // Live chat lines per seller, dripped in during negotiate stage
   const [nodeChatLines, setNodeChatLines] = useState<Record<string, ConversationLog[]>>({});
 
-  const timeoutsRef = useRef<number[]>([]);
+  const sessionIdRef = useRef<string | null>(null);
+  const streamCleanupRef = useRef<(() => void) | null>(null);
   const stepRef = useRef<HTMLDivElement>(null);
-
-  const clearTimers = useCallback(() => {
-    timeoutsRef.current.forEach((id) => window.clearTimeout(id));
-    timeoutsRef.current = [];
-  }, []);
-
-  useEffect(() => clearTimers, [clearTimers]);
 
   // GSAP curtain-wipe between steps
   useLayoutEffect(() => {
@@ -92,7 +92,9 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
   }, []);
 
   const reset = useCallback(() => {
-    clearTimers();
+    streamCleanupRef.current?.();
+    streamCleanupRef.current = null;
+    sessionIdRef.current = null;
     setStep(1);
     setStatus({ phase: "idle", stageIndex: -1, revealedSections: new Set() });
     setFeed([]);
@@ -102,161 +104,321 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
     setActiveSeller("");
     setVisibleNodeIds(new Set());
     setNodeChatLines({});
-  }, [clearTimers]);
+    setStrategyAlert(null);
+    setEscalationAlert(null);
+  }, []);
 
   const logout = useCallback(() => {
     reset();
     onLogout();
   }, [onLogout, reset]);
 
+  // Cleanup stream on unmount
+  useEffect(() => {
+    return () => { streamCleanupRef.current?.(); };
+  }, []);
+
+  const handleEvent = useCallback((event: StreamEvent) => {
+    // Capture session_id from the first event that carries it
+    if (event.session_id && !sessionIdRef.current) {
+      sessionIdRef.current = event.session_id;
+    }
+
+    switch (event.type) {
+      case "requirements": {
+        const d = event.data as Record<string, unknown>;
+        if (d.product_type) {
+          // Actual requirements extracted (not the status message)
+          setStatus((s) => ({ ...s, stageIndex: 0 }));
+          reveal(STAGE_REVEALS["intel"]);
+          pushFeed({
+            id: `req-${Date.now()}`,
+            agent: "orchestrator",
+            title: `Requirements extracted — ${d.product_type as string}`,
+            detail: `budget €${d.budget_eur as number} · ${d.max_delivery_days as number}d delivery`,
+          });
+        } else {
+          pushFeed({
+            id: `req-status-${Date.now()}`,
+            agent: "orchestrator",
+            title: (d.message as string) ?? "Extracting requirements…",
+          });
+        }
+        break;
+      }
+
+      case "cluster": {
+        const d = event.data as Record<string, unknown>;
+        const jc = d.judged_candidate as Record<string, unknown> | undefined;
+        pushFeed({
+          id: `cluster-${d.cluster_id ?? Date.now()}`,
+          agent: "cluster",
+          title: `Cluster ${d.cluster_id as string} · ${(d.products as unknown[])?.length ?? 0} products`,
+          detail: jc ? `Verdict: ${jc.verdict as string} · ${jc.reason as string}` : undefined,
+        });
+        if (jc) {
+          pushFeed({
+            id: `judge-${d.cluster_id ?? Date.now()}`,
+            agent: "judging",
+            title: `${jc.verdict as string} (score ${jc.score as number})`,
+            detail: jc.reason as string,
+          });
+        }
+        break;
+      }
+
+      case "match": {
+        const d = event.data as Record<string, unknown>;
+        setStatus((s) => ({ ...s, stageIndex: Math.max(s.stageIndex, 1) }));
+        reveal(STAGE_REVEALS["match"]);
+        setVisibleNodeIds((prev) => new Set([...prev, "orchestrator", d.seller_id as string]));
+        pushFeed({
+          id: `match-${d.seller_id as string}`,
+          agent: "orchestrator",
+          vendor: d.seller_name as string,
+          title: `Supplier matched — score ${((d.match_score as number) * 100).toFixed(0)}%`,
+          detail: d.reason as string,
+        });
+        break;
+      }
+
+      case "negotiation_turn": {
+        const log = event.data as ConversationLog & Record<string, unknown>;
+
+        if (log.event_kind === "strategy_selected") {
+          pushFeed({
+            id: `strategy-${Date.now()}`,
+            agent: "strategy",
+            title: log.message,
+          });
+          break;
+        }
+
+        if (log.event_kind === "supplier_fallback") {
+          pushFeed({
+            id: `fallback-${Date.now()}`,
+            agent: "escalation",
+            vendor: log.seller_name,
+            title: log.message,
+            variant: "fallback",
+          });
+          break;
+        }
+
+        if (log.event_kind === "seller_rejection") {
+          pushFeed({
+            id: `reject-${log.seller_id}-${Date.now()}`,
+            agent: "seller",
+            vendor: log.seller_name,
+            title: `Rejected — ${log.message.slice(0, 80)}${log.message.length > 80 ? "…" : ""}`,
+            variant: "rejection",
+          });
+          break;
+        }
+
+        // Normal negotiation turn
+        setStatus((s) => ({
+          ...s,
+          stageIndex: Math.max(s.stageIndex, 2),
+        }));
+        reveal(STAGE_REVEALS["negotiate"]);
+        setVisibleNodeIds((prev) => {
+          const next = new Set(prev);
+          next.add("buyerAgent");
+          if (log.seller_id) next.add(log.seller_id);
+          return next;
+        });
+        if (log.seller_id && log.speaker !== "system") {
+          setNodeChatLines((prev) => ({
+            ...prev,
+            [log.seller_id]: [...(prev[log.seller_id] ?? []), log],
+          }));
+        }
+        pushFeed({
+          id: `chat-${log.seller_id}-r${log.round}-${log.speaker}-${Date.now()}`,
+          agent: log.speaker === "buyer" ? "buyer" : "seller",
+          vendor: log.seller_name,
+          title: `"${log.message.length > 90 ? log.message.slice(0, 90) + "…" : log.message}"`,
+          detail: `Round ${log.round}`,
+        });
+        break;
+      }
+
+      case "validation": {
+        const d = event.data as Record<string, unknown>;
+        setStatus((s) => ({ ...s, stageIndex: Math.max(s.stageIndex, 3) }));
+        reveal(STAGE_REVEALS["pioneer"]);
+        pushFeed({
+          id: `val-${d.seller_id as string}-${Date.now()}`,
+          agent: "validation",
+          vendor: d.seller_name as string,
+          title: (d.status as string).toUpperCase(),
+          detail: (d.failed_constraints as string[])?.join(" · ") || "all constraints satisfied",
+        });
+        break;
+      }
+
+      case "human_alert": {
+        const d = event.data as HumanAlertData;
+        if (d.trigger === "strategy_selection") {
+          setStrategyAlert({
+            session_id: d.session_id,
+            options: d.strategy_options ?? [],
+          });
+          pushFeed({
+            id: `strategy-alert-${Date.now()}`,
+            agent: "strategy",
+            title: "Strategy selection required",
+            detail: "Waiting for user input…",
+          });
+        } else {
+          // Escalation / approval alert
+          const escalation: EscalationResult = {
+            escalate: true,
+            trigger: d.trigger,
+            reason: d.question ?? "",
+            question_for_human: d.question ?? "",
+          };
+          setEscalationAlert(escalation);
+          setStatus((s) => ({ ...s, phase: "awaiting_approval", stageIndex: Math.max(s.stageIndex, 4) }));
+          reveal(STAGE_REVEALS["escalate"]);
+          pushFeed({
+            id: `escalate-alert-${Date.now()}`,
+            agent: "escalation",
+            title: "Human decision required",
+            detail: d.question,
+          });
+        }
+        break;
+      }
+
+      case "escalation": {
+        const d = event.data as Record<string, unknown>;
+        pushFeed({
+          id: `esc-${Date.now()}`,
+          agent: "escalation",
+          title: d.escalate ? `Escalated — ${d.trigger as string}` : "No escalation required",
+          detail: d.reason as string,
+        });
+        break;
+      }
+
+      case "recommendation": {
+        const d = event.data as Record<string, unknown>;
+        setStatus((s) => ({ ...s, stageIndex: Math.max(s.stageIndex, 5) }));
+        reveal(STAGE_REVEALS["audit"]);
+        pushFeed({
+          id: `rec-${Date.now()}`,
+          agent: "recommendation",
+          title: d.recommended_product
+            ? `${d.recommended_product as string} · €${d.price_eur as number}`
+            : "No deal reached",
+          detail: (d.reason as string)?.slice(0, 100),
+        });
+        break;
+      }
+
+      case "audit": {
+        pushFeed({
+          id: `audit-${Date.now()}`,
+          agent: "audit",
+          title: "Audit summary ready",
+          detail: ((event.data as Record<string, unknown>).text as string)?.slice(0, 80),
+        });
+        break;
+      }
+
+      case "done": {
+        const demo = event.data as DemoResult;
+        setResult(demo);
+        setActiveSeller(
+          [...demo.matched_suppliers].sort((a, b) => b.match_score - a.match_score)[0]?.seller_id ?? "",
+        );
+        setStatus((s) => ({
+          ...s,
+          phase: s.phase === "awaiting_approval" ? "awaiting_approval" : "awaiting_approval",
+          stageIndex: STAGES.length,
+        }));
+        pushFeed({
+          id: `done-${Date.now()}`,
+          agent: "orchestrator",
+          title: "Run complete",
+          detail: `Strategy: ${demo.negotiation_strategy ?? "medium"} · ${demo.negotiation_outcome?.status ?? ""}`,
+        });
+        break;
+      }
+
+      case "error": {
+        const d = event.data as Record<string, unknown>;
+        setError((d.message as string) ?? "Stream error");
+        setStatus({ ...initialStatus, revealedSections: new Set() });
+        break;
+      }
+    }
+  }, [pushFeed, reveal]);
+
   const start = useCallback(
-    async (req: { raw_request: string; region: string; priority: string }) => {
-      clearTimers();
+    (req: { raw_request: string; region: string; priority: string }) => {
+      // Close any existing stream
+      streamCleanupRef.current?.();
+      sessionIdRef.current = null;
+
       setFeed([]);
       setDecision(null);
       setError(null);
       setResult(null);
       setActiveSeller("");
-      setVisibleNodeIds(new Set());
+      setVisibleNodeIds(new Set(["request"]));
       setNodeChatLines({});
+      setStrategyAlert(null);
+      setEscalationAlert(null);
       setStatus({ phase: "running", stageIndex: 0, revealedSections: new Set() });
       setStep(2);
 
-      let demo: DemoResult;
-      try {
-        demo = await runDemo(req);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to run demo");
-        setStatus({ ...initialStatus, revealedSections: new Set() });
-        return;
-      }
-
-      setResult(demo);
-      setActiveSeller(
-        [...demo.matched_suppliers].sort((a, b) => b.match_score - a.match_score)[0]
-          ?.seller_id ?? "",
+      const cleanup = streamDemo(
+        req,
+        handleEvent,
+        (_err) => {
+          setError("Stream connection failed. Is the backend running?");
+          setStatus({ ...initialStatus, revealedSections: new Set() });
+        },
       );
-
-      // Dynamic negotiate duration — long enough for all chat to drip in
-      const negotiateDuration = Math.max(
-        demo.matched_suppliers.length * SELLER_SPAWN_INTERVAL
-          + CHAT_START_DELAY
-          + demo.conversation_logs.length * CHAT_INTERVAL
-          + 600,
-        3000,
-      );
-
-      const stageDurations: Record<string, number> = {
-        ...STAGE_DURATION_MS,
-        negotiate: negotiateDuration,
-      };
-
-      // All schedules are registered at ~t=0 from start() so ms values are absolute
-      const schedule = (ms: number, fn: () => void) => {
-        const id = window.setTimeout(fn, ms);
-        timeoutsRef.current.push(id);
-      };
-
-      // Pre-compute stage start times
-      const matchStart = stageDurations.intel;
-      const negotiateStart = matchStart + stageDurations.match;
-
-      // ── Node reveal schedule ─────────────────────────────────────────────
-      // Request spawns immediately (stage 0)
-      schedule(0, () => setVisibleNodeIds(new Set(["request"])));
-      // Orchestrator spawns at match stage start
-      schedule(matchStart, () =>
-        setVisibleNodeIds((prev) => new Set([...prev, "orchestrator"])),
-      );
-      // BuyerAgent spawns at negotiate stage start
-      schedule(negotiateStart, () =>
-        setVisibleNodeIds((prev) => new Set([...prev, "buyerAgent"])),
-      );
-      // Sellers spawn one by one, best match first
-      [...demo.matched_suppliers]
-        .sort((a, b) => b.match_score - a.match_score)
-        .forEach((s, i) => {
-          schedule(negotiateStart + SELLER_SPAWN_INTERVAL * (i + 1), () => {
-            setVisibleNodeIds((prev) => new Set([...prev, s.seller_id]));
-          });
-        });
-
-      // ── Chat drip — one message at a time into each seller node ──────────
-      const chatStart =
-        negotiateStart
-        + demo.matched_suppliers.length * SELLER_SPAWN_INTERVAL
-        + CHAT_START_DELAY;
-
-      demo.conversation_logs.forEach((log, i) => {
-        schedule(chatStart + i * CHAT_INTERVAL, () => {
-          // Update canvas node chat
-          setNodeChatLines((prev) => ({
-            ...prev,
-            [log.seller_id]: [...(prev[log.seller_id] ?? []), log],
-          }));
-          // Mirror to activity feed
-          const vendor =
-            demo.matched_suppliers.find((s) => s.seller_id === log.seller_id)
-              ?.seller_name ?? log.seller_id;
-          pushFeed({
-            id: `chat-${i}`,
-            agent: log.speaker === "buyer" ? "buyer" : "seller",
-            vendor,
-            title: `"${log.message.length > 90 ? log.message.slice(0, 90) + "…" : log.message}"`,
-          });
-          if (log.speaker === "seller" && log.pioneer_labels.length > 0) {
-            const fields = Object.entries(log.extracted_fields ?? {})
-              .map(([k, v]) => `${k}: ${v}`)
-              .join(" · ");
-            pushFeed({
-              id: `pioneer-${i}`,
-              agent: "pioneer",
-              vendor,
-              title: `Labeled: ${log.pioneer_labels.join(", ")}`,
-              detail: fields || undefined,
-            });
-          }
-        });
-      });
-
-      // ── Stage scheduling loop (standard orchestration) ───────────────────
-      let elapsed = 0;
-      STAGES.forEach((stage, i) => {
-        schedule(elapsed, () => {
-          setStatus((s) => ({ ...s, stageIndex: i }));
-          emitStageStart(i, demo, pushFeed);
-        });
-        const duration = stageDurations[stage.id] ?? STAGE_DURATION_MS[stage.id];
-        schedule(elapsed + duration, () => {
-          reveal(STAGE_REVEALS[stage.id]);
-          emitStageEnd(i, demo, pushFeed);
-        });
-        elapsed += duration;
-      });
-
-      schedule(elapsed + 200, () => {
-        setStatus((s) => ({
-          ...s,
-          phase: "awaiting_approval",
-          stageIndex: STAGES.length,
-        }));
-      });
+      streamCleanupRef.current = cleanup;
     },
-    [clearTimers, pushFeed, reveal],
+    [handleEvent],
   );
 
-  const handleDecide = useCallback((d: "approved" | "rejected") => {
+  const handleStrategyChoice = useCallback(async (strategy: NegotiationStrategy) => {
+    setStrategyAlert(null);
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    try {
+      await sendStrategyChoice(sid, strategy);
+    } catch {
+      // non-fatal — backend will default to medium if no response arrives
+    }
+  }, []);
+
+  const handleDecide = useCallback(async (d: "approved" | "rejected") => {
     setDecision(d);
+    setEscalationAlert(null);
     setStatus((s) => ({ ...s, phase: d === "approved" ? "approved" : "rejected" }));
+    const sid = sessionIdRef.current;
+    if (sid) {
+      try {
+        await sendHumanResponse(sid, d === "approved" ? "approve" : "reject");
+      } catch {
+        // non-fatal
+      }
+    }
   }, []);
 
   const showSection = (id: SectionId) => status.revealedSections.has(id);
   const isIdle = status.phase === "idle";
   const isRunning = status.phase === "running";
-  // runComplete: user decided, OR pipeline finished with no escalation needed
   const runComplete =
-    decision !== null ||
-    (status.phase === "awaiting_approval" && result?.escalation_result?.escalate === false);
+    result !== null &&
+    (decision !== null || result?.escalation_result?.escalate === false);
   const heroPhase = useMemo(() => status.phase, [status.phase]);
 
   return (
@@ -268,7 +430,6 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
           className="flex min-h-[100dvh] flex-col"
           style={{ background: "radial-gradient(ellipse 90% 55% at 50% 60%, rgba(47,111,237,0.07) 0%, #ffffff 62%)" }}
         >
-          {/* Top nav */}
           <header className="flex h-14 shrink-0 items-center justify-between px-8">
             <div className="flex items-center gap-2">
               <svg aria-hidden width="14" height="14" viewBox="0 0 18 18" className="text-accent">
@@ -292,10 +453,7 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
             </div>
           </header>
 
-          {/* Centered hero */}
           <main className="flex flex-1 flex-col items-center justify-center px-6 pb-16">
-
-            {/* Badge */}
             <motion.div
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
@@ -306,7 +464,6 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
               </span>
             </motion.div>
 
-            {/* Wordmark */}
             <motion.h1
               initial={{ opacity: 0, y: 16 }}
               animate={{ opacity: 1, y: 0 }}
@@ -316,7 +473,6 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
               Pactum
             </motion.h1>
 
-            {/* Subtitle */}
             <motion.p
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
@@ -326,7 +482,6 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
               Five agents discover suppliers, negotiate in real time, and surface the best deal — one button.
             </motion.p>
 
-            {/* Form */}
             <motion.div
               initial={{ opacity: 0, y: 14 }}
               animate={{ opacity: 1, y: 0 }}
@@ -336,7 +491,6 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
               <RequestForm onStart={start} disabled={isRunning || !isIdle} />
             </motion.div>
 
-            {/* Inline meta */}
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -372,7 +526,6 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
           )}
 
           <div className="flex min-h-0 flex-1">
-            {/* Main canvas */}
             <div className="flex-1 border-r border-border">
               <AgentNetwork
                 stageIndex={status.stageIndex}
@@ -386,7 +539,6 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
               />
             </div>
 
-            {/* Right rail */}
             <div className="flex w-72 shrink-0 flex-col bg-white">
               <div className="min-h-0 flex-1">
                 <ActivityFeed items={feed} demoMode={result?.demo_mode} />
@@ -394,17 +546,22 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
             </div>
           </div>
 
-          {/* Escalation modal — overlays Step 2 when pipeline needs human decision */}
-          {status.phase === "awaiting_approval" &&
-            result?.escalation_result?.escalate === true &&
-            decision === null && (
-              <EscalationModal
-                data={result.escalation_result}
-                onDecide={handleDecide}
-              />
-            )}
+          {/* Strategy selection modal — pauses stream for user input */}
+          {strategyAlert && (
+            <StrategyModal
+              options={strategyAlert.options}
+              onChoose={handleStrategyChoice}
+            />
+          )}
 
-          {/* Bottom bar */}
+          {/* Escalation modal — shown on approval_required alert */}
+          {escalationAlert && decision === null && (
+            <EscalationModal
+              data={escalationAlert}
+              onDecide={handleDecide}
+            />
+          )}
+
           <div className="flex h-12 shrink-0 items-center justify-between border-t border-border bg-white px-8">
             <button
               onClick={reset}
@@ -426,7 +583,9 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
                   ? "● Processing…"
                   : status.phase === "awaiting_approval"
                     ? "⚠ Awaiting decision"
-                    : "Standby"}
+                    : strategyAlert
+                      ? "⚙ Strategy selection required"
+                      : "Standby"}
               </span>
             )}
           </div>
@@ -468,82 +627,4 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
       )}
     </div>
   );
-}
-
-function emitStageStart(i: number, demo: DemoResult, push: (it: FeedItem) => void) {
-  const events: FeedItem[][] = [
-    [{ id: "s0-start", agent: "orchestrator", title: "Routing to Procurement Intelligence Agent" }],
-    [{ id: "s1-start", agent: "system", title: "Querying internal supplier registry" }],
-    [{ id: "s2-start", agent: "buyer", title: `Opening negotiations with ${demo.matched_suppliers.length} sellers`, detail: "Round 1 dispatch" }],
-    [{ id: "s3-start", agent: "validation", title: "Running deterministic constraint checks" }],
-    [{ id: "s4-start", agent: "escalation", title: "Evaluating escalation triggers" }],
-    [{ id: "s5-start", agent: "orchestrator", title: "Compiling audit summary" }],
-  ];
-  events[i]?.forEach(push);
-}
-
-function emitStageEnd(i: number, demo: DemoResult, push: (it: FeedItem) => void) {
-  const req = demo.structured_requirements;
-
-  if (i === 0) {
-    push({
-      id: "s0-end",
-      agent: "orchestrator",
-      title: `Extracted ${Object.keys(req).length} structured requirements`,
-      detail: `budget €${req.budget_eur} · max ${req.max_length_mm}mm · ${req.max_delivery_days}d delivery`,
-    });
-    return;
-  }
-
-  if (i === 1) {
-    push({ id: "s1-end1", agent: "system", title: `${demo.matched_suppliers.length} candidate suppliers ranked` });
-    if (demo.tavily_enrichment.triggered) {
-      push({ id: "s1-end2", agent: "tavily", title: "External enrichment triggered", detail: `${demo.tavily_enrichment.results.length} results` });
-    }
-    return;
-  }
-
-  if (i === 2) {
-    // Chat messages dripped in via schedule — just emit a summary
-    push({
-      id: "s2-end",
-      agent: "buyer",
-      title: `Negotiation complete — ${demo.matched_suppliers.length} vendors`,
-      detail: `${demo.conversation_logs.length} messages exchanged`,
-    });
-    return;
-  }
-
-  if (i === 3) {
-    demo.validation_results.forEach((r) => {
-      push({
-        id: `s3-${r.seller_id}`,
-        agent: "validation",
-        vendor: r.seller_name,
-        title: r.status.toUpperCase(),
-        detail: r.failed_constraints.length > 0 ? r.failed_constraints.join(" · ") : "all constraints satisfied",
-      });
-    });
-    return;
-  }
-
-  if (i === 4) {
-    push({
-      id: "s4-end",
-      agent: "escalation",
-      title: demo.escalation_result.escalate ? `Trigger: ${demo.escalation_result.trigger}` : "No escalation required",
-      detail: demo.escalation_result.reason,
-    });
-    return;
-  }
-
-  if (i === 5) {
-    const rec = demo.final_recommendation;
-    push({
-      id: "s5-end",
-      agent: "orchestrator",
-      title: "Recommendation ready",
-      detail: `${rec.recommended_seller} · ${rec.recommended_product} · €${rec.price_eur}`,
-    });
-  }
 }

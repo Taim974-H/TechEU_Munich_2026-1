@@ -80,12 +80,24 @@ export interface SellerInventoryMerchant {
   inventories: SellerInventory[];
 }
 
+export type NegotiationStrategy = "aggressive" | "medium" | "light";
+
+export type ConversationLogEventKind =
+  | "turn"
+  | "seller_rejection"
+  | "supplier_fallback"
+  | "strategy_selected";
+
 export interface ConversationLog {
   seller_id: string;
   seller_name?: string;
-  speaker: "buyer" | "seller";
+  speaker: "buyer" | "seller" | "system";
   message: string;
   round: number;
+  event_kind?: ConversationLogEventKind;
+  is_rejection?: boolean;
+  next_seller_id?: string;
+  next_seller_name?: string;
   pioneer_labels: PioneerLabel[];
   risk_level: RiskLevel;
   extracted_fields?: Record<string, string | number>;
@@ -160,6 +172,13 @@ export interface SellerProduct {
   availability: string;
 }
 
+export interface NegotiationOutcome {
+  status: "accepted" | "failed";
+  strategy: NegotiationStrategy;
+  winning_seller_id: string;
+  rejected_sellers: string[];
+}
+
 export interface DemoResult {
   request: BuyerRequest;
   structured_requirements: StructuredRequirements;
@@ -175,6 +194,8 @@ export interface DemoResult {
   deal_card_path: string;
   demo_mode: boolean;
   session_id?: string;
+  negotiation_strategy?: NegotiationStrategy;
+  negotiation_outcome?: NegotiationOutcome;
 }
 
 // Phase 3 — streaming + inline human-in-the-loop ------------------------
@@ -200,17 +221,27 @@ export interface StreamEvent<T = unknown> {
   session_id: string | null;
 }
 
+export interface StrategyOption {
+  id: NegotiationStrategy;
+  label: string;
+  max_rounds: number;
+  description: string;
+}
+
 export interface HumanAlertData {
   session_id: string;
   question: string;
-  trigger: string;
-  best_offer: {
+  trigger: "strategy_selection" | "approval_required" | string;
+  // strategy_selection fields
+  strategy_options?: StrategyOption[];
+  // approval_required fields
+  best_offer?: {
     seller_name?: string;
     product?: string;
     price_eur?: number;
     delivery_days?: number;
   } | null;
-  budget_eur: number;
+  budget_eur?: number;
 }
 
 export type HumanResponseDecision = "approve" | "reject" | "adjust";

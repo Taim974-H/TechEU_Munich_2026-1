@@ -28,7 +28,9 @@ The demo wins if a judge can clearly see:
 * Arbitrary products stay anchored to the buyer's requested category via `product_type` + `product_keywords`.
 * Products are clustered by spec similarity across all seller inventories.
 * A Judging Agent evaluates each candidate and **explains in natural language** why something is good, borderline, or bad.
-* The Negotiation Agent generates **live, non-preset dialogue** with modular sub-agents (price, delivery, warranty, risk) constrained by guardrails.
+* Before negotiations start, a **mid-flow human alert pauses the stream** and asks the buyer to choose a negotiation strategy (Aggressive / Medium / Light).
+* The Negotiation Agent runs **multi-round Gemini dialogue** driven by the chosen strategy (5/3/2 rounds, 18%/8%/4% target discount). Messages are ≤2 sentences / 50 words — conversational, not formal.
+* The seller enforces a **deterministic 10% floor**: if the buyer pushes below 90% of listed price, the seller rejects (no Gemini call) and the system routes to the next-ranked supplier (waterfall fallback).
 * Pioneer labels seller messages and extracts offer fields.
 * Tavily enriches missing supplier/spec information when needed.
 * fal creates a visual procurement deal card.
@@ -568,20 +570,26 @@ Verdict values: `good` · `borderline` · `bad`
 }
 ```
 
-### Conversation Log (same shape, message now Gemini-generated)
+### Conversation Log (Phase 6 — event_kind added)
 
 ```json
 {
   "seller_id": "vendor_b",
   "seller_name": "Vendor B",
   "speaker": "seller",
-  "message": "We can offer the RTX 4070 Super Compact at €640 including delivery.",
+  "message": "Best I can do is €608 — take it or leave it.",
   "round": 2,
+  "event_kind": "turn",
+  "is_rejection": false,
   "pioneer_labels": ["price_concession", "final_offer"],
   "risk_level": "low",
-  "extracted_fields": { "price_eur": 640, "delivery_days": 5 }
+  "extracted_fields": { "price_eur": 608, "delivery_days": 5 }
 }
 ```
+
+`event_kind` values: `"turn"` · `"seller_rejection"` · `"supplier_fallback"` · `"strategy_selected"`
+
+`speaker` values: `"buyer"` · `"seller"` · `"system"` (for strategy/fallback events)
 
 ### Validation Result (unchanged)
 
@@ -621,7 +629,7 @@ Statuses: `passed` · `rejected` · `negotiable` · `missing_information`
 }
 ```
 
-### Full DemoResult (stable keys — new additive keys marked)
+### Full DemoResult (stable keys — Phase 6 additions marked)
 
 ```json
 {
@@ -638,11 +646,18 @@ Statuses: `passed` · `rejected` · `negotiable` · `missing_information`
   "audit_summary": "",
   "final_recommendation": {},
   "deal_card_path": "assets/fal_deal_card.png",
-  "demo_mode": false
+  "demo_mode": false,
+  "negotiation_strategy": "medium",
+  "negotiation_outcome": {
+    "status": "accepted",
+    "strategy": "medium",
+    "winning_seller_id": "vendor_b",
+    "rejected_sellers": []
+  }
 }
 ```
 
-`clusters[]` and `judged_candidates[]` are additive — existing section components are unaffected.
+`negotiation_strategy` and `negotiation_outcome` are additive — existing section components are unaffected.
 
 ---
 
@@ -946,22 +961,23 @@ The reviewer's core objection: everything is pre-written — the system reads fi
 | `backend/agents/product_clustering.py` | ✅ Updated (Phase 3) | Greedy euclidean clustering with category-safe product filtering; preserves arbitrary product spec fields for generalized products. |
 | `backend/agents/product_utils.py` | ✅ Added (Phase 3) | Shared product-category filter keeps GPU, chair, and sensor requests matched to relevant inventory families. |
 | `backend/agents/supplier_matching.py` | ✅ Updated (Phase 3) | Category-safe supplier scoring from registry + local nested inventory. |
-| `backend/orchestrator.py` | ✅ Updated (Phase 3) | `run_demo_events()` yields all frozen SSE event types and pauses on `human_alert` when a human waiter is provided; `run_demo()` auto-continues for non-streaming fallback. |
+| `backend/orchestrator.py` | ✅ Updated (Phase 6) | Strategy-selection `human_alert` before negotiation; rank-ordered supplier waterfall; `supplier_fallback` events; `negotiation_strategy` + `negotiation_outcome` in `done` payload. |
 | `backend/hitl_sessions.py` | ✅ Added (Phase 3) | In-memory session queues for streamed human response pause/resume. |
 | `backend/api.py` | ✅ Updated (Phase 3) | `GET /api/run-demo/stream`, `POST /api/human-response`, `GET /api/inventory`, and `GET /api/config` are live. |
-| `frontend/src/lib/stream.ts` | ✅ Updated (Phase 3) | EventSource client with `completed` flag, request_id support, and normal-close protection. |
+| `frontend/src/lib/stream.ts` | ✅ Updated (Phase 6) | `sendStrategyChoice(sessionId, strategy)` added alongside existing `sendHumanResponse`. |
 | `frontend/src/lib/api.ts` | ✅ Updated (Phase 3) | Added `postHumanResponse()`, `getInventory()`, and `getConfig()` alongside existing replay/scenario calls. |
-| `frontend/src/lib/types.ts` | ✅ Updated (Phase 3) | Generalized `InventoryProduct`, nested seller inventory types, `HumanResponse`, and arbitrary product spec fields. |
-| `frontend/src/components/feed/ActivityFeed.tsx` | ✅ Updated (Phase 3) | Inline approve/adjust/reject controls on `human_alert`, plus gemini/clustering/judging feed types. |
+| `frontend/src/lib/types.ts` | ✅ Updated (Phase 6) | `NegotiationStrategy`, `ConversationLogEventKind`, `NegotiationOutcome`, `StrategyOption`; `ConversationLog.event_kind` / `is_rejection`; `HumanAlertData` discriminated on `trigger`; `DemoResult` extended with strategy fields. |
+| `frontend/src/components/feed/ActivityFeed.tsx` | ✅ Updated (Phase 6) | `strategy` + `negotiation` agent types; `variant?: "rejection" \| "fallback"` with red/amber row styling. |
+| `frontend/src/components/modals/StrategyModal.tsx` | ✅ Added (Phase 6) | GSAP modal with three strategy cards (Aggressive/Medium/Light), round-count glyphs, per-strategy colour coding. |
 | `frontend/src/components/sections/SellerInventoryView.tsx` | ✅ Added (Phase 3) | Renders nested generalized product inventory for GPUs, chairs, sensors, and future spec fields. |
 | `frontend/src/components/hero/AgentNetwork.tsx` | ✅ Updated (Phase 3) | Dynamic generalized request labels, supplier counts, and hoverable communication-edge details. |
 | `frontend/src/components/hero/MessageEdge.tsx` | ✅ Updated (Phase 3) | Edge labels and hover detail popups for negotiation/Pioneer communication data. |
 | `frontend/src/app/page.tsx` | ✅ Updated (Phase 3) | Three views, live/replay banner, scenario-driven streaming, inventory view, and human response wiring. |
 | `backend/agents/judging_agent.py` | ✅ Complete (Phase 2) | `judge_candidates()` — Gemini per-candidate reasoning; verdict: good/borderline/bad + natural language reason. |
-| `backend/agents/negotiation_agent.py` | ✅ Updated (Phase 3) | Live Gemini dialogue per turn; gated on good/borderline cluster judgements and category-safe product selection. |
+| `backend/agents/negotiation_agent.py` | ✅ Updated (Phase 6) | Strategy-driven multi-round loop (5/3/2 rounds); deterministic 10% seller floor; `negotiate_one_supplier` public generator; `_trim()` 50-word cap; `run_negotiation` waterfall. |
 | `backend/agents/negotiation/` sub-agents | ✅ Complete (Phase 2) | price, delivery, warranty, risk, guardrails — all live. |
 | `backend/schemas.py` (`ExtraConstraint`) | ✅ Updated (Phase 2) | `ExtraConstraint` TypedDict + `evaluate_constraints()` as shared constraint evaluator; `max_length_mm`/`max_power_watts` now presence-gated. |
-| `backend/prompts.py` | ✅ Updated (Phase 2) | All prompts generalized for any B2B product type (not GPU-specific). |
+| `backend/prompts.py` | ✅ Updated (Phase 6) | `BUYER_STRATEGY_PROMPTS` (aggressive/medium/light), `STRATEGY_OPTIONS`; buyer + seller system prompts rewritten for ≤2 sentences / 45 words conversational style. |
 | `data/seller_registry.json` | ✅ Updated (Phase 2) | 7 vendor profiles: original 5 + vendor_f (ergonomic chairs) + vendor_g (industrial sensors). |
 | `data/seller_inventory.json` | ✅ Updated (Phase 2) | 34 products across 7 vendors (added 5 chairs + 5 sensors). |
 | `data/buyer_scenarios.json` | ✅ Updated (Phase 2) | 5 scenarios: REQ-001–003 (GPU variants) + REQ-004 (chair) + REQ-005 (sensor). |
@@ -989,7 +1005,7 @@ The reviewer's core objection: everything is pre-written — the system reads fi
 | `frontend/src/lib/api.ts` | ✅ Updated (Phase 5) | Added `getInventory()` → `GET /api/inventory` and `getSellerInventory()` → `GET /api/seller-inventory`. |
 | `frontend/src/lib/types.ts` | ✅ Updated (Phase 5) | `MatchedSupplier` registry fields optional; `SellerInventoryMerchant` shape used by `getInventory()`. |
 | `frontend/src/seller/SellerWorkspace.tsx` | ✅ Updated (Phase 5) | Mock data imports removed; inventory from `/api/inventory`; Supabase Realtime subscription for live buyer→seller updates. |
-| `frontend/src/buyer/BuyerWorkspace.tsx` | ✅ Added (Phase 5) | Buyer-role workspace with GSAP animations, step flow, and `runDemo()` wired to backend. |
+| `frontend/src/buyer/BuyerWorkspace.tsx` | ✅ Updated (Phase 6) | Migrated from blocking `runDemo()` + setTimeout drip to real `streamDemo()` SSE; all event types handled inline; `StrategyModal` on strategy alert; node visibility driven by real events. |
 | `frontend/src/components/auth/LoginScreen.tsx` | ✅ Added (Phase 5) | Demo login screen (root/buyer/seller hardcoded roles; no backend auth). |
 | `frontend/src/components/screens/DecisionScreen.tsx` | ✅ Added (Phase 5) | Final decision view showing validation, audit, suppliers, and recommendation. |
 | `frontend/src/components/modals/EscalationModal.tsx` | ✅ Added (Phase 5) | Inline escalation modal wired to human-alert flow. |
@@ -997,13 +1013,31 @@ The reviewer's core objection: everything is pre-written — the system reads fi
 | `backend/api.py` | ✅ Updated (Phase 5) | CORS includes port 3003; both run-demo routes call `write_demo_session()` after completion. |
 | `backend/data_access.py` | ✅ Updated (Phase 5) | `write_demo_session()` — enriches matched_suppliers with registry and upserts to `demo_sessions`. |
 
-### What needs to be built (Phase 5 onward)
+### Phase 6 deliverables (COMPLETE — multi-round strategy negotiation)
+
+1. ✅ `backend/prompts.py` — `BUYER_STRATEGY_PROMPTS` (aggressive/medium/light system-prompt suffixes) + `STRATEGY_OPTIONS` (payload for strategy-selection human alert); both buyer and seller prompts rewritten for ≤2 sentences / 45 words conversational chat style
+2. ✅ `backend/agents/negotiation_agent.py` — `STRATEGY_CONFIG` (5/3/2 round caps, 18%/8%/4% discount targets), `SELLER_MAX_DISCOUNT_PCT=0.10`, `_buyer_target_price()` deterministic per-round discount, `_trim()` 50-word safety cap, multi-round loop, deterministic seller rejection (no Gemini call when floor crossed), public `negotiate_one_supplier` generator, `run_negotiation` waterfall
+3. ✅ `backend/orchestrator.py` — strategy-selection `human_alert` fires before negotiations (pauses SSE; defaults to `"medium"` on non-streaming path); rank-ordered waterfall loop across suppliers (stop on first acceptance); `supplier_fallback` events emitted between rejected suppliers; `no-deal` reason explains strategy rejection; `negotiation_strategy` + `negotiation_outcome` added to `done` payload
+4. ✅ `backend/api.py` — `HumanResponseIn` gets `strategy: Optional[str]`; forwarded into `submit_response`
+5. ✅ `backend/schemas.py` — `negotiation_strategy` on `StructuredRequirements`; `event_kind` / `is_rejection` on `ConversationLogItem`; `negotiation_strategy` / `negotiation_outcome` on `DemoResult`
+6. ✅ `frontend/src/lib/types.ts` — `NegotiationStrategy`, `ConversationLogEventKind`, `NegotiationOutcome`, `StrategyOption`; `ConversationLog.event_kind` / `is_rejection`; `HumanAlertData` discriminated on `trigger`; `DemoResult` extended
+7. ✅ `frontend/src/lib/stream.ts` — `sendStrategyChoice(sessionId, strategy)` added
+8. ✅ `frontend/src/components/modals/StrategyModal.tsx` — new GSAP modal with three strategy cards (Aggressive/Medium/Light), round-count glyphs, per-strategy colour coding
+9. ✅ `frontend/src/components/feed/ActivityFeed.tsx` — `strategy` + `negotiation` agent types added; `variant?: "rejection" | "fallback"` prop with red/amber row styling
+10. ✅ `frontend/src/buyer/BuyerWorkspace.tsx` — migrated from blocking `runDemo()` + `setTimeout` drip to real `streamDemo()` SSE; every event type handled inline; `StrategyModal` on `human_alert{trigger:"strategy_selection"}`; `EscalationModal` on approval alert; node visibility driven by real events
+11. ✅ `tests/test_hitl.py` — updated for two sequential `human_alert`s (strategy first, then approval); asserts strategy flows into `done` payload
+
+**Strategy discount curves (deterministic):**
+- Light: rounds up to 2, 2%→4% off → always above 10% floor → deal accepted
+- Medium: rounds up to 3, 3%→8% off → always above 10% floor → deal accepted
+- Aggressive: rounds up to 5, 4%→12%+ off → **crosses 10% floor at round 3** → deterministic rejection → waterfall to next supplier → if all reject → `no-deal` recommendation
+
+### What needs to be built (Phase 6 onward)
 
 | Component | Priority | Notes |
 |-----------|----------|-------|
 | Supabase `demo_sessions` table | REQUIRED | Run SQL from Phase 5 section above; without it, Realtime bridge is a no-op. |
 | `integrations/email_hitl.py` (Gmail, stretch) | STRETCH | — |
-| `assets/fal_deal_card.png` placeholder | MEDIUM | — |
 | Aikido screenshot | MEDIUM | — |
 | Replay transcript save (DEMO_MODE=true full replay path) | MEDIUM | — |
 

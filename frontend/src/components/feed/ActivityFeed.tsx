@@ -17,11 +17,14 @@ export type FeedItem = {
     | "cluster"
     | "audit"
     | "recommendation"
-    | "system";
+    | "system"
+    | "strategy"
+    | "negotiation";
   title: string;
   detail?: string;
   vendor?: string;
   ts?: number;
+  variant?: "rejection" | "fallback";
 };
 
 interface Props {
@@ -111,8 +114,15 @@ function FeedRow({ item, startTs }: { item: FeedItem; startTs?: number }) {
       ? ((item.ts - startTs) / 1000).toFixed(1)
       : null;
 
+  const variantClass =
+    item.variant === "rejection"
+      ? "border-red-200 bg-red-50 hover:border-red-300 hover:bg-red-50"
+      : item.variant === "fallback"
+        ? "border-amber-200 bg-amber-50 hover:border-amber-300 hover:bg-amber-50"
+        : "border-transparent hover:border-border hover:bg-surface-2";
+
   return (
-    <div className="flex items-start gap-2.5 rounded-lg border border-transparent px-2 py-1.5 transition-colors hover:border-border hover:bg-surface-2">
+    <div className={`flex items-start gap-2.5 rounded-lg border px-2 py-1.5 transition-colors ${variantClass}`}>
       <span
         className={`mt-px grid h-6 w-6 shrink-0 place-items-center rounded-md font-mono text-[10px] font-semibold ${meta.bg} ${meta.fg}`}
       >
@@ -233,6 +243,18 @@ const agentMeta: Record<
   system: {
     label: "System",
     glyph: "·",
+    bg: "bg-surface-2",
+    fg: "text-text-2",
+  },
+  strategy: {
+    label: "Strategy",
+    glyph: "⚙",
+    bg: "bg-accent-soft",
+    fg: "text-accent",
+  },
+  negotiation: {
+    label: "Negotiation",
+    glyph: "↔",
     bg: "bg-surface-2",
     fg: "text-text-2",
   },
