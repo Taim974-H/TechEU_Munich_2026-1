@@ -51,6 +51,7 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
   const [decision, setDecision] = useState<"approved" | "rejected" | null>(null);
   const [activeSeller, setActiveSeller] = useState<string>("");
   const [result, setResult] = useState<DemoResult | null>(null);
+  const [requestLabel, setRequestLabel] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
 
   // Streaming-specific state
@@ -102,6 +103,7 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
     setResult(null);
     setError(null);
     setActiveSeller("");
+    setRequestLabel("");
     setVisibleNodeIds(new Set());
     setNodeChatLines({});
     setStrategyAlert(null);
@@ -127,8 +129,11 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
     switch (event.type) {
       case "requirements": {
         const d = event.data as Record<string, unknown>;
+        setVisibleNodeIds((prev) => new Set([...prev, "procurement"]));
         if (d.product_type) {
           // Actual requirements extracted (not the status message)
+          const budget = d.budget_eur ? ` · €${d.budget_eur as number}` : "";
+          setRequestLabel(`${d.product_type as string}${budget}`);
           setStatus((s) => ({ ...s, stageIndex: 0 }));
           reveal(STAGE_REVEALS["intel"]);
           pushFeed({
@@ -150,6 +155,8 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
       case "cluster": {
         const d = event.data as Record<string, unknown>;
         const jc = d.judged_candidate as Record<string, unknown> | undefined;
+        setStatus((s) => ({ ...s, stageIndex: Math.max(s.stageIndex, 1) }));
+        setVisibleNodeIds((prev) => new Set([...prev, "clustering", "judging"]));
         pushFeed({
           id: `cluster-${d.cluster_id ?? Date.now()}`,
           agent: "cluster",
@@ -171,7 +178,7 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
         const d = event.data as Record<string, unknown>;
         setStatus((s) => ({ ...s, stageIndex: Math.max(s.stageIndex, 1) }));
         reveal(STAGE_REVEALS["match"]);
-        setVisibleNodeIds((prev) => new Set([...prev, "orchestrator", d.seller_id as string]));
+        setVisibleNodeIds((prev) => new Set([...prev, "orchestrator", "matching", d.seller_id as string]));
         pushFeed({
           id: `match-${d.seller_id as string}`,
           agent: "orchestrator",
@@ -224,7 +231,7 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
         reveal(STAGE_REVEALS["negotiate"]);
         setVisibleNodeIds((prev) => {
           const next = new Set(prev);
-          next.add("buyerAgent");
+          next.add("negotiation");
           if (log.seller_id) next.add(log.seller_id);
           return next;
         });
@@ -368,10 +375,15 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
       setError(null);
       setResult(null);
       setActiveSeller("");
-      setVisibleNodeIds(new Set(["request"]));
+      setVisibleNodeIds(new Set(["request", "orchestrator"]));
       setNodeChatLines({});
       setStrategyAlert(null);
       setEscalationAlert(null);
+
+      // Immediate label from the raw request; refined once `requirements` arrives
+      const words = req.raw_request.trim().split(/\s+/);
+      setRequestLabel(words.slice(0, 5).join(" ") + (words.length > 5 ? "…" : ""));
+
       setStatus({ phase: "running", stageIndex: 0, revealedSections: new Set() });
       setStep(2);
 
@@ -536,6 +548,8 @@ export function BuyerWorkspace({ onLogout, accountLabel = "NovaCompute GmbH" }: 
                 suppliers={result?.matched_suppliers ?? []}
                 visibleNodeIds={visibleNodeIds}
                 chatLines={nodeChatLines}
+                requestLabel={requestLabel}
+                judgedCandidates={result?.judged_candidates ?? []}
               />
             </div>
 
