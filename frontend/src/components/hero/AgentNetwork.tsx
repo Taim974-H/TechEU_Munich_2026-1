@@ -41,6 +41,7 @@ interface Props {
   chatLines: Record<string, ConversationLog[]>;
   requestLabel?: string;
   judgedCandidates?: JudgedCandidate[];
+  rejectedSellerIds?: Set<string>;
   escalation?: { payload: EscalationResult; sellerId: string } | null;
   onEscalationDecide?: (d: "approved" | "rejected" | "renegotiate" | "restart", note?: string) => void;
 }
@@ -79,6 +80,7 @@ export function AgentNetwork({
   chatLines,
   requestLabel = "New Request",
   judgedCandidates = [],
+  rejectedSellerIds = new Set(),
   escalation,
   onEscalationDecide,
 }: Props) {
@@ -232,6 +234,7 @@ export function AgentNetwork({
           selected: canInteract && s.seller_id === activeSeller,
           interactive: canInteract,
           chatLines: chatLines[s.seller_id] ?? [],
+          rejected: rejectedSellerIds.has(s.seller_id),
         },
         draggable: false,
         selectable: false,

@@ -668,6 +668,7 @@ export function SellerNode({
   selected?: boolean;
   interactive?: boolean;
   chatLines?: ConversationLog[];
+  rejected?: boolean;
 }>) {
   const chatLines = data.chatLines ?? [];
   const hasChatLines = chatLines.length > 0;
@@ -678,11 +679,13 @@ export function SellerNode({
     if (el) el.scrollTop = el.scrollHeight;
   }, [chatLines.length]);
 
-  const ring = data.selected
-    ? "ring-2 ring-accent shadow-[0_0_0_4px_rgba(47,111,237,0.10)]"
-    : data.highlight
-      ? "ring-1 ring-accent"
-      : ringState(data);
+  const ring = data.rejected
+    ? "ring-2 ring-danger shadow-[0_0_0_4px_rgba(239,68,68,0.10)]"
+    : data.selected
+      ? "ring-2 ring-accent shadow-[0_0_0_4px_rgba(47,111,237,0.10)]"
+      : data.highlight
+        ? "ring-1 ring-accent"
+        : ringState(data);
 
   return (
     <motion.div
@@ -858,7 +861,7 @@ export function DecisionNode({
             <button
               onClick={() => data.onDecide?.("renegotiate", note.trim())}
               disabled={!note.trim()}
-              className="h-8 flex-1 rounded-lg bg-text-1 text-[11px] font-semibold text-white transition-transform active:scale-[0.97] disabled:opacity-40"
+              className="h-8 flex-1 rounded-lg bg-accent text-[11px] font-semibold text-white transition-transform active:scale-[0.97] disabled:opacity-40"
             >
               Send
             </button>
@@ -869,7 +872,7 @@ export function DecisionNode({
           {noOffer ? (
             <button
               onClick={() => data.onDecide?.("restart")}
-              className="h-8 w-full rounded-lg bg-text-1 text-[11px] font-semibold text-white transition-transform active:scale-[0.97]"
+              className="h-8 w-full rounded-lg bg-accent text-[11px] font-semibold text-white transition-transform active:scale-[0.97]"
             >
               New Search
             </button>
@@ -877,7 +880,7 @@ export function DecisionNode({
             <>
               <button
                 onClick={() => data.onDecide?.("approved")}
-                className="h-8 w-full rounded-lg bg-text-1 text-[11px] font-semibold text-white transition-transform active:scale-[0.97]"
+                className="h-8 w-full rounded-lg bg-accent text-[11px] font-semibold text-white transition-transform active:scale-[0.97]"
               >
                 Approve
               </button>

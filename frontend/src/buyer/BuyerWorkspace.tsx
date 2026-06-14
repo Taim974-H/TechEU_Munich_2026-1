@@ -66,6 +66,7 @@ export function BuyerWorkspace({ onLogout, accountLabel = "Horizon Analytics Gmb
     payload: EscalationResult;
     sellerId: string;
   } | null>(null);
+  const [rejectedSellerIds, setRejectedSellerIds] = useState<Set<string>>(new Set());
 
   const sessionIdRef = useRef<string | null>(null);
   const streamCleanupRef = useRef<(() => void) | null>(null);
@@ -114,6 +115,7 @@ export function BuyerWorkspace({ onLogout, accountLabel = "Horizon Analytics Gmb
     setVisibleNodeIds(new Set());
     setNodeChatLines({});
     setActiveEscalation(null);
+    setRejectedSellerIds(new Set());
   }, []);
 
   const logout = useCallback(() => {
@@ -499,6 +501,12 @@ export function BuyerWorkspace({ onLogout, accountLabel = "Horizon Analytics Gmb
         next.delete(`decision-${activeEscalation.sellerId}`);
         return next;
       });
+
+      // If rejecting, mark this seller as rejected (for visual feedback on node)
+      if (d === "rejected") {
+        setRejectedSellerIds(prev => new Set([...prev, activeEscalation.sellerId]));
+      }
+
       setActiveEscalation(null);
     }
 
@@ -521,8 +529,17 @@ export function BuyerWorkspace({ onLogout, accountLabel = "Horizon Analytics Gmb
       }
       return;
     }
+
+    // For approve: show decision, move to approved phase (go to audit)
+    // For reject: stay in running phase (waterfall to next supplier)
     setDecision(d);
-    setStatus((s) => ({ ...s, phase: d === "approved" ? "approved" : "rejected" }));
+    if (d === "approved") {
+      setStatus((s) => ({ ...s, phase: "approved" }));
+    } else if (d === "rejected") {
+      // Continue running to allow waterfall to next supplier
+      setStatus((s) => ({ ...s, phase: "running" }));
+    }
+
     const sid = sessionIdRef.current;
     if (sid) {
       try {
@@ -659,6 +676,7 @@ export function BuyerWorkspace({ onLogout, accountLabel = "Horizon Analytics Gmb
                   chatLines={nodeChatLines}
                   requestLabel={requestLabel}
                   judgedCandidates={result?.judged_candidates ?? liveJudgedCandidates}
+                  rejectedSellerIds={rejectedSellerIds}
                   escalation={activeEscalation}
                   onEscalationDecide={handleDecide}
                 />
