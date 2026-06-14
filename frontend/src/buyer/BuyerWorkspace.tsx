@@ -69,6 +69,7 @@ export function BuyerWorkspace({ onLogout, accountLabel = "Horizon Analytics Gmb
   const streamCleanupRef = useRef<(() => void) | null>(null);
   const chosenStrategyRef = useRef<NegotiationStrategy>("medium");
   const lastNegotiationSellerRef = useRef<string>("");
+  const liveSuppliersRef = useRef<MatchedSupplier[]>([]);
   const stepRef = useRef<HTMLDivElement>(null);
 
   // GSAP curtain-wipe between steps
@@ -111,6 +112,9 @@ export function BuyerWorkspace({ onLogout, accountLabel = "Horizon Analytics Gmb
     setRequestLabel("");
     setVisibleNodeIds(new Set());
     setNodeChatLines({});
+    setLiveSuppliers([]);
+    liveSuppliersRef.current = [];
+    setLiveJudgedCandidates([]);
     setActiveEscalations(new Map());
     setRejectedSellerIds(new Set());
   }, []);
@@ -192,7 +196,9 @@ export function BuyerWorkspace({ onLogout, accountLabel = "Horizon Analytics Gmb
         setVisibleNodeIds((prev) => new Set([...prev, "orchestrator", "matching", d.seller_id]));
         setLiveSuppliers((prev) => {
           const exists = prev.some((s) => s.seller_id === d.seller_id);
-          return exists ? prev : [...prev, d];
+          const next = exists ? prev : [...prev, d];
+          liveSuppliersRef.current = next;
+          return next;
         });
         pushFeed({
           id: `match-${d.seller_id}`,
@@ -328,7 +334,7 @@ export function BuyerWorkspace({ onLogout, accountLabel = "Horizon Analytics Gmb
           // Show a decision node for every matched supplier — human_alert fires
           // only after ALL negotiations complete, so every supplier is ready.
           // Do NOT filter by nodeChatLines here: the SSE closure may be stale.
-          const allSuppliers = result?.matched_suppliers ?? liveSuppliers;
+          const allSuppliers = result?.matched_suppliers ?? liveSuppliersRef.current;
           const allEscalations = new Map<string, EscalationResult>();
           for (const s of allSuppliers) {
             allEscalations.set(s.seller_id, { ...escalation });
@@ -465,6 +471,7 @@ export function BuyerWorkspace({ onLogout, accountLabel = "Horizon Analytics Gmb
       setVisibleNodeIds(new Set(["request", "orchestrator"]));
       setNodeChatLines({});
       setLiveSuppliers([]);
+      liveSuppliersRef.current = [];
       setLiveJudgedCandidates([]);
 
       // Immediate label from the raw request; refined once `requirements` arrives
