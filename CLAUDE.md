@@ -1,33 +1,30 @@
-# CLAUDE.md — Pactum
+# CLAUDE.md
 
-Persistent working context for Claude Code in this repo.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ---
 
-## 1. What This Is
+## What This Is
 
-**Pactum** is a multi-agent B2B procurement negotiation layer. A buyer types a free-text procurement request; the system extracts requirements, clusters matching products, judges candidates, negotiates live with ranked suppliers, pauses for human strategy selection, and produces an audited recommendation.
-
-Hackathon-grade vertical slice — not a full procurement platform. Any product type (GPUs, chairs, sensors, etc.).
+**Pactum** is a multi-agent B2B procurement negotiation layer built for TechEU Munich 2026. A buyer types a free-text procurement request; agents extract requirements, cluster matching products, judge candidates, negotiate live in parallel with 3 ranked suppliers, validate offers against deterministic constraints, and produce an audited recommendation with one human approval gate at the end.
 
 **Demo wins when a judge can see:**
 - Buyer types a custom prompt and clicks one button.
 - Agent feed runs line by line in real time — LLM calls happen live.
 - Gemini extracts structured requirements from free text.
-- Products cluster by spec similarity across all 7 vendor inventories.
+- Products cluster by spec similarity across all 7 vendor inventories. Judging runs in parallel (~5s for all clusters).
 - A Judging Agent explains in natural language why each candidate is good, borderline, or bad.
-- A mid-flow human alert pauses the stream and asks for a negotiation strategy (Aggressive / Medium / Light).
-- Negotiation Agent runs multi-round Gemini dialogue (5/3/2 rounds, 18%/8%/4% target discount). Messages ≤50 words, conversational.
+- Negotiation Agent runs 3 suppliers in parallel with real-time turn streaming (5/3/2 rounds, 18%/8%/4% discount targets). Messages ≤50 words. Strategy auto-selected from Gemini-extracted requirements or defaults to `medium`.
 - Seller enforces a deterministic 10% price floor — if buyer pushes below it, seller rejects (no Gemini call) and the system waterfalls to the next supplier.
 - Pioneer labels seller messages and extracts offer fields.
 - Tavily enriches missing supplier/spec info.
 - fal generates a visual deal card.
-- A second human alert pauses for final approval.
+- One human alert pauses for final approval.
 - Audit/Summary Subagent explains the final recommendation.
 
 ---
 
-## 2. Architecture
+## Architecture
 
 ```
 Human Buyer (custom prompt)
@@ -45,17 +42,17 @@ Product Clustering  ← cluster_products() deterministic euclidean distance
   ↓
 Supplier Matching  ← BM25-style scoring from seller_registry
   ↓
-Judging Agent  ← judge_candidates() via Gemini per candidate
+Judging Agent  ← judge_candidate() via Gemini, all clusters in parallel (ThreadPoolExecutor)
   ↓
-[human_alert: strategy_selection]  ← pauses SSE; buyer picks Aggressive/Medium/Light
-  ↓
-Negotiation Agent  ← multi-round Gemini; waterfall across ranked suppliers
+Negotiation Agent  ← 3 suppliers run in parallel; turns stream live via queue.Queue
   ├─ Price / Delivery / Warranty / Risk sub-agents
   └─ Deterministic 10% seller floor (no Gemini when floor crossed)
   ↓
 Pioneer  ← labels generated seller messages; extracts offer fields
   ↓
-[human_alert: approval]  ← pauses SSE; buyer approves/rejects/adjusts
+Validation  ← deterministic constraint checks per offer
+  ↓
+[human_alert: approval_required]  ← only HITL pause; buyer approves/rejects/renegotiates
   ↓
 Audit/Summary Subagent  ← Gemini narrative
   ↓
@@ -67,46 +64,51 @@ done event (carries full DemoResult)
 ### SSE event order (frozen)
 
 ```
-requirements → cluster → match → [human_alert: strategy_selection] →
-negotiation_turn* → [supplier_fallback] → validation → [human_alert: approval] →
-escalation → recommendation → audit → done
+requirements → cluster* → match* → top_candidates →
+negotiation_turn* → pioneer → validation* →
+[human_alert: approval_required] → escalation → recommendation → audit → fal → done
 ```
 
-`human_alert` pauses the stream. `POST /api/human-response` resumes it.
+`*` = repeating. `human_alert` pauses the SSE stream. `POST /api/human-response` resumes it. There is exactly **one** human pause point (final approval).
+
+### Parallelism in orchestrator.py
+
+- **Judging**: `concurrent.futures.ThreadPoolExecutor`, `as_completed()` — events emit as each call returns.
+- **Negotiation**: 3 worker threads feed into a shared `queue.Queue`; the main thread drains it and `yield`s each turn with a sleep delay to simulate human typing pace.
 
 ### Custom prompt flow (default)
 
 - Buyer types freely; `request_id` is optional; orchestrator assigns `CUSTOM-<uuid>`.
 - Unknown products do not fall through to GPU/chair/sensor inventory.
+- `product_type` + `product_keywords` are the source of truth — never remap.
 - If no internal match, Tavily enrichment becomes the visible fallback.
 
 ### Replay/fallback (DEMO_MODE=true)
 
-- `POST /api/run-demo` (blocking) replays a saved transcript.
-- No API keys required. Use as the CTO safety net during live judging.
-- UI banner shows "Live LLM mode" vs "Replay mode".
+- `POST /api/run-demo` (blocking) uses saved/fallback data.
+- No API keys required. Use as the safety net during live judging.
 
 ---
 
-## 3. Tech Stack
+## Tech Stack
 
 | Layer | Choice | Notes |
 |-------|--------|-------|
-| Primary frontend | Next.js 15 | `frontend/` — buyer, seller, and root views |
+| Primary frontend | Next.js 15 | `frontend/` — buyer, seller, root views |
 | Legacy frontend | Streamlit | `streamlit_app.py` — fallback only |
-| Backend | FastAPI | `backend/api.py` — both UIs |
+| Backend | FastAPI | `backend/api.py` |
 | Primary LLM | Gemini 2.5 Flash | `integrations/gemini_client.py` |
 | Message labeling | Pioneer | `integrations/pioneer_client.py` |
 | External enrichment | Tavily | `integrations/tavily_client.py` |
 | Deal card | fal | `integrations/fal_client.py` |
-| Realtime | Supabase Realtime | seller dashboard subscribes to `demo_sessions` |
+| Realtime | Supabase Realtime | seller dashboard subscribes to `demo_sessions` INSERT |
 
-**LLM routing rule:** deterministic Python owns all pass/fail decisions. Gemini owns language: extraction, negotiation dialogue, judging reasoning, audit. Never let Gemini override a hard constraint check.
+**LLM routing rule:** deterministic Python owns all pass/fail decisions. Gemini owns language. Never let Gemini override a hard constraint check.
 
 ### Deterministic validation (never delegate to LLM)
 
 ```
-length_mm     <= max_length_mm      (presence-gated)
+length_mm     <= max_length_mm      (presence-gated — omitted if buyer didn't specify)
 power_watts   <= max_power_watts    (presence-gated)
 price_eur     <= budget_eur
 delivery_days <= max_delivery_days
@@ -121,6 +123,8 @@ warranty_years >= minimum_warranty_years
 | Medium | 3 | 3%→8% | Always above floor → accepted |
 | Aggressive | 5 | 4%→12%+ | Crosses floor at round 3 → rejected → waterfall |
 
+Strategy is read from `structured_requirements["negotiation_strategy"]` (Gemini-extracted) or defaults to `"medium"`. No user modal.
+
 ### Timeouts and fallbacks
 
 | API | Timeout | Retry | Fallback |
@@ -132,79 +136,7 @@ warranty_years >= minimum_warranty_years
 
 ---
 
-## 4. Directory Structure
-
-```
-pactum/
-├── backend/
-│   ├── api.py                      FastAPI routes (SSE + blocking + HITL)
-│   ├── orchestrator.py             run_demo_events() generator; strategy alert; waterfall
-│   ├── hitl_sessions.py            in-memory pause/resume queues
-│   ├── schemas.py                  all TypedDicts/Pydantic (source of truth for shapes)
-│   ├── prompts.py                  ALL Gemini prompts centralized here
-│   ├── data_access.py              local JSON reads + write_demo_session() to Supabase
-│   └── agents/
-│       ├── procurement_intelligence.py   extract_requirements() + validate_offer()
-│       ├── product_clustering.py         cluster_products()
-│       ├── product_utils.py              category-safe keyword matching
-│       ├── supplier_matching.py          BM25-style scoring
-│       ├── judging_agent.py              judge_candidates() via Gemini
-│       ├── negotiation_agent.py          run_negotiation() waterfall; negotiate_one_supplier()
-│       ├── negotiation/
-│       │   ├── price.py / delivery.py / warranty.py / risk.py
-│       │   └── guardrails.py             system-prompt + post-gen word-count check
-│       ├── human_escalation.py           escalation trigger logic
-│       └── audit_summary.py              Gemini narrative
-│
-├── integrations/
-│   ├── gemini_client.py            generate(prompt, *, system, temperature, json_mode) → str
-│   ├── pioneer_client.py
-│   ├── tavily_client.py
-│   ├── fal_client.py
-│   └── fallback_outputs.py
-│
-├── frontend/
-│   ├── src/
-│   │   ├── app/
-│   │   │   ├── page.tsx            root orchestration view
-│   │   │   └── seller/page.tsx     seller role page
-│   │   ├── buyer/BuyerWorkspace.tsx   real SSE streaming; StrategyModal; EscalationModal
-│   │   ├── seller/SellerWorkspace.tsx Supabase Realtime subscription
-│   │   └── lib/
-│   │       ├── api.ts              runDemo, getScenarios, getInventory, postHumanResponse
-│   │       ├── stream.ts           EventSource client; sendStrategyChoice; sendHumanResponse
-│   │       ├── types.ts            all frontend types (mirror backend schemas)
-│   │       └── demoMachine.ts      stage/reveal machine; STAGE_REVEALS; STAGE_DURATION_MS
-│   └── components/
-│       ├── auth/LoginScreen.tsx    hardcoded demo roles (buyer/seller/root)
-│       ├── screens/DecisionScreen.tsx
-│       ├── modals/StrategyModal.tsx    Aggressive/Medium/Light cards
-│       ├── modals/EscalationModal.tsx
-│       ├── feed/ActivityFeed.tsx   event-append; rejection/fallback row variants
-│       ├── hero/AgentNetwork.tsx
-│       ├── hero/MessageEdge.tsx
-│       ├── input/RequestForm.tsx   empty custom prompt is default
-│       └── sections/               ValidationTable, StructuredRequirements, SellerInventoryView, …
-│
-├── data/
-│   ├── seller_registry.json        7 vendor profiles
-│   ├── seller_inventory.json       nested merchants→inventories→products; 34 products
-│   ├── buyer_scenarios.json        blueprints REQ-001–005 (no structured_requirements)
-│   └── tavily_fallback_results.json
-│
-├── assets/fal_deal_card.png        fallback deal card image
-├── tests/
-│   ├── test_validation.py
-│   ├── test_hitl.py
-│   └── test_generalized_matching.py
-├── requirements.txt
-├── .env                            git-ignored
-└── .env.example
-```
-
----
-
-## 5. Commands
+## Commands
 
 ```bash
 # Setup
@@ -222,26 +154,28 @@ cd frontend && npm install && npm run dev       # terminal 2
 DEMO_MODE=true uvicorn backend.api:app --reload --port 8000
 
 # Tests
-python -m pytest
+python -m pytest                          # all 17 tests
+python -m pytest tests/test_hitl.py -v   # single file
+python -m pytest tests/ -k "hitl" -v     # by keyword
 
-# Lint
+# Lint / type-check
 ruff check . && ruff format .
 mypy backend integrations
 
-# CLI demo run
+# CLI demo run (no frontend)
 python -m backend.orchestrator
 ```
 
 ---
 
-## 6. API Contracts (frozen)
+## API Contracts (frozen)
 
 ### Streaming (primary)
 
 ```
 GET /api/run-demo/stream?raw_request=...&region=...
 Content-Type: text/event-stream
-→ { "type": "<event_type>", "stage": "<stage>", "data": {...}, "ts": <ms> }
+→ { "type": "<event_type>", "stage": "<stage>", "data": {...}, "session_id": str, "ts": <ms> }
 ```
 
 ### Blocking (replay / Streamlit fallback)
@@ -256,17 +190,21 @@ Returns: DemoResult
 
 ```
 POST /api/human-response
-Body: { "session_id": "...", "action": "approve"|"reject"|"adjust", "note": "...", "strategy": "aggressive"|"medium"|"light" }
+Body: { "session_id": "...", "action": "approve"|"reject"|"renegotiate", "note": "..." }
 Returns: { "ok": true }
 ```
 
-### Other routes
+### Inventory endpoints
 
 ```
-GET /api/scenarios    → BuyerBlueprint[]
-GET /api/inventory    → nested seller inventory
-GET /api/config       → { "demo_mode": bool }
+GET /api/seller-inventory   → flat list of all 35 products (seller_id on each row) — USE THIS
+GET /api/inventory          → nested merchants→inventories→products structure
+GET /api/scenarios          → BuyerBlueprint[]
+GET /api/config             → { "demo_mode": bool }
+GET /api/latest-session     → most recent DemoResult (in-memory fallback when Supabase not set)
 ```
+
+The frontend's `SellerWorkspace` uses `/api/seller-inventory` (flat). The nested `/api/inventory` exists for backward compat only — Supabase's `seller_inventory` table may not exist.
 
 ### Key shapes
 
@@ -286,23 +224,21 @@ GET /api/config       → { "demo_mode": bool }
   "negotiation_strategy": "medium"
 }
 ```
-`max_length_mm` and `max_power_watts` are presence-gated — omitted when not stated by buyer.
 
-**ConversationLog** (Phase 6 shape):
+**ConversationLog**:
 ```json
 {
   "seller_id": "vendor_b", "seller_name": "Vendor B",
   "speaker": "buyer"|"seller"|"system",
   "message": "...", "round": 2,
-  "event_kind": "turn"|"seller_rejection"|"supplier_fallback"|"strategy_selected",
-  "is_rejection": false,
+  "event_kind": "turn"|"seller_rejection"|"supplier_fallback"|"renegotiation_start",
   "pioneer_labels": ["price_concession"],
   "risk_level": "low",
   "extracted_fields": { "price_eur": 608 }
 }
 ```
 
-**DemoResult** (stable keys — additions are additive):
+**DemoResult** (stable keys — additions are additive, never rename/remove):
 ```json
 {
   "request": {}, "structured_requirements": {},
@@ -323,14 +259,12 @@ GET /api/config       → { "demo_mode": bool }
 }
 ```
 
-Do not silently rename or remove any existing DemoResult key — frontend components depend on them.
-
 ---
 
-## 7. Environment Variables
+## Environment Variables
 
 ```
-DEMO_MODE=false          # true = replay; false = live LLM (default)
+DEMO_MODE=false          # true = replay mode; false = live LLM (default)
 LLM_API_KEY              # Gemini key
 LLM_PROVIDER=gemini
 PIONEER_API_KEY
@@ -339,8 +273,8 @@ TAVILY_API_KEY
 FAL_KEY / FAL_API_KEY
 SUPABASE_URL
 SUPABASE_ANON_KEY
-GMAIL_ADDRESS            # stretch
-GMAIL_APP_PASSWORD       # stretch
+SUPABASE_SKIP=true       # force local-only mode even if Supabase vars are set
+LOCAL_ONLY_READS=true    # skip seller_inventory_products Supabase query
 ```
 
 Frontend (`frontend/.env.local`):
@@ -350,11 +284,11 @@ NEXT_PUBLIC_SUPABASE_URL=...
 NEXT_PUBLIC_SUPABASE_ANON_KEY=...
 ```
 
-Never hardcode keys. Never commit `.env`. System must run without keys in replay mode.
-
 ---
 
-## 8. Supabase Setup (run once)
+## Supabase Setup (run once)
+
+Only the `demo_sessions` table is required for seller Realtime. The `seller_inventory` table is NOT required — the frontend uses the REST API.
 
 ```sql
 create table if not exists demo_sessions (
@@ -366,47 +300,33 @@ create table if not exists demo_sessions (
 alter publication supabase_realtime add table demo_sessions;
 ```
 
-Realtime flow: buyer run completes → `write_demo_session()` upserts → seller dashboard subscription fires.
+Realtime flow: buyer run completes → `write_demo_session()` upserts → seller dashboard Realtime subscription fires.
 
 ---
 
-## 9. Coding Conventions
+## Coding Conventions
 
 - All Gemini prompts live in `backend/prompts.py`. Never scatter prompt strings in agent files.
 - Guardrail system prompts stay in `backend/agents/negotiation/guardrails.py`.
-- All schemas in `backend/schemas.py`. Keep aligned with Section 6 contracts.
+- All schemas in `backend/schemas.py`. Keep aligned with API Contracts section above.
 - Catch all external API errors inside integration clients. Return structured fallbacks. Never crash the UI flow.
-- Prefer clear names over clever abstractions.
-- Every Gemini call must have a fallback path.
 - `product_type` + `product_keywords` are the source of truth for what product the buyer wants. Do not remap an unknown product into GPUs, chairs, or sensors.
+- Every Gemini call must have a fallback path.
 
 ---
 
-## 10. Hard Rules
+## Hard Rules
 
 **Do:**
 - Keep LLM calls real and visible — no pre-written dialogue.
 - Stream agent feed line by line.
 - Explain every rejection with natural language from the judging agent.
-- Keep the human in control at two decision points (strategy selection + final approval).
+- Keep the human in control at one decision point: final approval.
 - Use `DEMO_MODE=true` as the safety net if live APIs are unstable.
 
 **Do not:**
 - Let any LLM override deterministic validation.
 - Break existing DemoResult key shapes.
 - Silently remap unknown product categories to demo inventory categories.
-- Hardcode secrets or commit `.env`.
-- Add complexity toggles — show full orchestration to everyone.
+- Add a `strategy_selection` HITL pause — strategy is now auto-selected.
 - Build real purchasing, payments, or real vendor messaging.
-
----
-
-## 11. Remaining Work
-
-| Item | Priority |
-|------|----------|
-| Supabase `demo_sessions` table (SQL above) | Required for Realtime |
-| `assets/fal_deal_card.png` fallback image | Before demo |
-| Replay transcript save (`DEMO_MODE=true` full path) | Medium |
-| `integrations/email_hitl.py` Gmail loop | Stretch |
-| Aikido security scan screenshot | Medium |

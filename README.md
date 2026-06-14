@@ -1,207 +1,217 @@
 # Pactum
 
-Multi-agent B2B procurement negotiation layer. Built for the TechEU Munich 2026 hackathon.
+**Multi-agent B2B procurement negotiation — one button, five agents, live LLM.**
 
-A human buyer enters a messy procurement request. Pactum extracts structured requirements, matches suppliers, runs a negotiation between buyer and seller agents, validates offers against technical constraints, and produces a final recommendation — with human approval at the end.
+Built at TechEU Munich 2026. A buyer types a messy free-text procurement request. Five agents extract requirements, cluster products, judge candidates, negotiate with three suppliers in parallel, validate every offer against hard constraints, and surface the best deal — with a single human approval at the end.
+
+---
+
+## How it works
+
+```
+Buyer types: "Need 12× RTX 4090 cards, EU shipping, under €1800, 2yr warranty"
+                              ↓
+          ┌─────────────────────────────────────────┐
+          │  Gemini extracts structured requirements │
+          └─────────────────────────────────────────┘
+                              ↓
+          ┌─────────────────────────────────────────┐
+          │  Products cluster by spec similarity    │
+          │  Judging Agent scores each cluster      │  ← parallel Gemini calls
+          └─────────────────────────────────────────┘
+                              ↓
+          ┌─────────────────────────────────────────┐
+          │  3 suppliers negotiate simultaneously   │  ← real-time turn streaming
+          │  • 5/3/2 rounds per strategy            │
+          │  • 10% seller floor (deterministic)     │
+          │  • Waterfall on rejection               │
+          └─────────────────────────────────────────┘
+                              ↓
+          ┌─────────────────────────────────────────┐
+          │  Pioneer labels every seller message    │
+          │  Deterministic constraint validation    │
+          └─────────────────────────────────────────┘
+                              ↓
+                  ⚠  Human approval gate
+                              ↓
+          ┌─────────────────────────────────────────┐
+          │  Gemini audit summary + fal deal card   │
+          └─────────────────────────────────────────┘
+```
+
+---
+
+## Stack
+
+| Layer | Tech |
+|-------|------|
+| Frontend | Next.js 15, Tailwind CSS v4, React Flow, motion/react, GSAP |
+| Backend | FastAPI, Python 3.12, SSE streaming |
+| LLM | Gemini 2.5 Flash |
+| Message labeling | Pioneer |
+| Supplier enrichment | Tavily |
+| Deal card image | fal |
+| Realtime (seller dashboard) | Supabase Realtime |
+
+---
+
+## Quick start
+
+**Prerequisites:** Python 3.12+, Node 20+
+
+```bash
+# 1. Clone and set up Python env
+git clone <repo-url> && cd munich-hack
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+# 2. Configure environment
+cp .env.example .env
+# Fill in: LLM_API_KEY, PIONEER_API_KEY, TAVILY_API_KEY, FAL_KEY, SUPABASE_URL, SUPABASE_ANON_KEY
+
+# 3. Start backend
+uvicorn backend.api:app --reload --port 8000
+
+# 4. Start frontend (new terminal)
+cd frontend && npm install && npm run dev
+```
+
+Open **http://localhost:3000**
+
+| Role | Username | Password |
+|------|----------|----------|
+| Buyer | `buyer` | `123` |
+| Seller | `seller` | `123` |
+| Admin | `root` | `root` |
+
+### No API keys? Run in replay mode
+
+```bash
+DEMO_MODE=true uvicorn backend.api:app --reload --port 8000
+```
+
+The frontend shows a "Replay mode" banner. No external calls are made — safe for demos when connectivity is uncertain.
 
 ---
 
 ## Project structure
 
 ```
-pactum/
-├── streamlit_app.py          — Streamlit dashboard (alternate/legacy UI)
 ├── backend/
-│   ├── api.py                 — FastAPI bridge for the Next.js frontend
-│   ├── orchestrator.py       — run_demo() end-to-end flow
-│   ├── schemas.py            — TypedDicts for all data shapes
-│   ├── data_access.py         — Supabase client with local JSON fallback
+│   ├── api.py                     FastAPI routes (SSE + blocking + HITL)
+│   ├── orchestrator.py            run_demo_events() — the full agent pipeline
+│   ├── prompts.py                 ALL Gemini prompts (centralized)
+│   ├── schemas.py                 TypedDicts / Pydantic shapes (source of truth)
+│   ├── data_access.py             Supabase client with local JSON fallback
+│   ├── hitl_sessions.py           in-memory pause/resume queues for HITL
 │   └── agents/
-│       ├── procurement_intelligence.py  — requirement extraction + validation
-│       ├── supplier_matching.py         — BM25-style vendor scoring
-│       ├── buyer_agent.py               — negotiation loop
-│       ├── seller_agent.py              — concession logic
-│       ├── human_escalation.py          — escalation triggers
-│       └── audit_summary.py             — final narrative summary
+│       ├── procurement_intelligence.py   requirements extraction + offer validation
+│       ├── product_clustering.py         euclidean-distance clustering
+│       ├── supplier_matching.py          BM25-style vendor scoring
+│       ├── judging_agent.py              per-cluster Gemini verdict
+│       ├── negotiation_agent.py          multi-round negotiation loop + waterfall
+│       ├── negotiation/                  price / delivery / warranty / risk sub-agents
+│       ├── human_escalation.py           escalation trigger logic
+│       └── audit_summary.py              Gemini narrative summary
+│
 ├── integrations/
-│   ├── pioneer_client.py     — message classification + field extraction
-│   ├── tavily_client.py      — external supplier/spec enrichment
-│   ├── fal_client.py         — visual deal card generation
-│   └── fallback_outputs.py   — static fallbacks for all three APIs
-├── data/                      — seed data + Supabase setup (see below)
-│   ├── *.json                 — seed/fallback data for all Supabase tables
-│   ├── scripts/
-│   │   ├── apply_schema.py    — applies data/supabase/schema.sql to Postgres
-│   │   └── seed_supabase.py   — upserts data/*.json into Supabase tables
-│   └── supabase/
-│       └── schema.sql         — Supabase table definitions
-├── frontend/                  — Next.js UI (the app's frontend) + FastAPI client (src/lib/api.ts)
-├── assets/                    — deal card image and screenshots
-├── security/                  — Aikido security scan notes
+│   ├── gemini_client.py           generate(prompt, *, system, temperature, json_mode)
+│   ├── pioneer_client.py          message classification + field extraction
+│   ├── tavily_client.py           external supplier/spec enrichment
+│   ├── fal_client.py              visual deal card generation
+│   └── fallback_outputs.py        static fallbacks for all external APIs
+│
+├── frontend/src/
+│   ├── buyer/BuyerWorkspace.tsx   SSE streaming, agent network, HITL modals
+│   ├── seller/SellerWorkspace.tsx live negotiation feed + inventory dashboard
+│   ├── lib/stream.ts              EventSource client + HITL response helpers
+│   ├── lib/types.ts               TypeScript types mirroring backend schemas
+│   └── components/
+│       ├── hero/AgentNetwork.tsx  React Flow agent graph (live node visibility)
+│       ├── feed/ActivityFeed.tsx  real-time event feed with rejection variants
+│       └── hero/nodes.tsx         seller chat nodes with per-node decide buttons
+│
+├── data/
+│   ├── seller_registry.json       7 vendor profiles
+│   ├── seller_inventory.json      35 products across 7 vendors
+│   └── buyer_scenarios.json       5 demo request blueprints
+│
 └── tests/
-    └── test_validation.py    — deterministic constraint tests
+    ├── test_hitl.py               HITL session + orchestrator integration tests
+    ├── test_validation.py         deterministic constraint validation tests
+    └── test_generalized_matching.py  product matching + clustering tests
 ```
 
 ---
 
-## 1. Setup
+## Key design decisions
 
-### Backend (Python)
+**LLM vs deterministic split.** Gemini owns language — requirements extraction, negotiation dialogue, judging reasoning, audit narrative. Python owns every pass/fail decision — constraint validation, price floor enforcement, waterfall triggering, best-offer selection. No LLM call can override a hard constraint.
 
-```bash
-# Create and activate a virtual environment
-python -m venv .venv
-source .venv/bin/activate        # macOS / Linux
-# .venv\Scripts\activate          # Windows
+**Real-time parallel negotiation.** Three suppliers run in separate threads feeding a shared `queue.Queue`. The main thread drains the queue and yields each turn over SSE with a typing-delay sleep, so the buyer sees all three conversations filling in simultaneously.
 
-# Install dependencies
-pip install -r requirements.txt
+**Single HITL gate.** There is exactly one human pause point — final approval after validation. Negotiation strategy is extracted from the buyer's request by Gemini (or defaults to `medium`). No modal interrupts the negotiation flow.
 
-# Copy the env template and fill in your keys
-cp .env.example .env
-```
-
-### Frontend (Next.js prototype)
-
-```bash
-cd frontend
-npm install
-```
+**10% seller price floor (deterministic).** The floor check runs before any Gemini call. If the buyer's offer would push below it, the seller rejects immediately with a templated message and the orchestrator waterfalls to the next supplier.
 
 ---
 
-## 2. Environment variables
+## Negotiation strategies
 
-Copy `.env.example` to `.env` and fill in values:
+| Strategy | Rounds | Discount target | vs 10% floor |
+|----------|--------|-----------------|--------------|
+| `light` | 2 | 2% → 4% | Always accepted |
+| `medium` | 3 | 3% → 8% | Always accepted |
+| `aggressive` | 5 | 4% → 12%+ | Crosses floor at round 3 → rejected → waterfall |
+
+---
+
+## Environment variables
 
 ```bash
-DEMO_MODE=true
-
-# Supabase
-SUPABASE_URL=
-SUPABASE_ANON_KEY=
-SUPABASE_SERVICE_ROLE_KEY=
-
-# Direct Postgres connection (used by data/scripts/apply_schema.py)
-SUPABASE_DB_HOST=
-SUPABASE_DB_PORT=
-SUPABASE_DB_NAME=
-SUPABASE_DB_USER=
-SUPABASE_DB_PASSWORD=
-
-# Side track integrations
+# Backend (.env)
+DEMO_MODE=false          # true = replay; false = live LLM
+LLM_API_KEY=             # Gemini API key
+LLM_PROVIDER=gemini
 PIONEER_API_KEY=
 PIONEER_BASE_URL=
 TAVILY_API_KEY=
 FAL_KEY=
-FAL_API_KEY=
-LLM_API_KEY=
-LLM_PROVIDER=
+SUPABASE_URL=
+SUPABASE_ANON_KEY=
+
+# Frontend (frontend/.env.local)
+NEXT_PUBLIC_API_URL=http://localhost:8000
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
 ```
 
-`DEMO_MODE=true` is the only required variable to run the app without any external services. `backend/data_access.py` reads from Supabase when `SUPABASE_URL`/`SUPABASE_ANON_KEY` are set, and falls back to the local JSON files in `data/` otherwise (or if the Supabase call fails).
+The system runs fully offline with `DEMO_MODE=true` and no Supabase config.
 
 ---
 
-## 3. Data & Supabase
+## Supabase (seller Realtime dashboard)
 
-The JSON files in `data/` are the seed/fallback data for every Supabase table used by the app. The actual runtime data now lives in Supabase — `data/*.json` exist so the demo still works offline (`DEMO_MODE=true`) and so the Supabase project can be rebuilt from scratch.
+Only one table is required. `seller_inventory` is served from the REST API — no Supabase table needed for it.
 
-To (re)create and seed the Supabase project:
-
-```bash
-# 1. Apply the schema (requires SUPABASE_DB_* vars in .env)
-python -m data.scripts.apply_schema
-
-# 2. Seed all tables from data/*.json (requires SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY)
-python -m data.scripts.seed_supabase
+```sql
+create table if not exists demo_sessions (
+  id          uuid        primary key default gen_random_uuid(),
+  session_id  text        unique not null,
+  result      jsonb       not null,
+  created_at  timestamptz default now()
+);
+alter publication supabase_realtime add table demo_sessions;
 ```
+
+When a buyer run completes, `write_demo_session()` upserts the full `DemoResult` and the seller dashboard's Realtime subscription fires automatically.
 
 ---
 
-## 4. Running the app
-
-### Main app — Next.js + FastAPI (the integrated app)
-
-The Next.js frontend is the app's UI. It talks to a FastAPI bridge over HTTP, which calls `run_demo()` in `backend/orchestrator.py`. **Both processes must be running.**
-
-**Terminal 1 — FastAPI backend** (http://localhost:8000):
+## Tests
 
 ```bash
-DEMO_MODE=true uvicorn backend.api:app --reload --port 8000
+python -m pytest                          # all 17 tests
+python -m pytest tests/test_hitl.py -v   # HITL + orchestrator
+python -m pytest tests/ -k "matching"    # by keyword
 ```
-
-**Terminal 2 — Next.js frontend** (http://localhost:3000):
-
-```bash
-cd frontend
-npm run dev
-```
-
-Open **http://localhost:3000**, submit a procurement request, and the frontend calls `POST /api/run-demo` on the FastAPI backend for real `run_demo()` output. CORS is pre-configured for `http://localhost:3000`. To point the frontend at a different backend URL, set `NEXT_PUBLIC_API_URL` (e.g. in `frontend/.env.local`).
-
-### Alternate UI — Streamlit
-
-A secondary, self-contained dashboard that calls `run_demo()` directly (no FastAPI needed).
-
-```bash
-# Demo mode (no external API keys required, Supabase data still live if configured)
-DEMO_MODE=true streamlit run streamlit_app.py
-
-# Live mode (requires API keys in .env)
-streamlit run streamlit_app.py
-
-# Different port
-streamlit run streamlit_app.py --server.port 8502
-```
-
-The app opens at **http://localhost:8501**.
-
-### Backend only (no UI)
-
-```bash
-DEMO_MODE=true python -m backend.orchestrator
-```
-
----
-
-## 5. Useful commands
-
-```bash
-# Run tests
-python -m pytest tests/ -q
-
-# Lint
-ruff check .
-
-# Format
-ruff format .
-
-# Typecheck
-mypy backend integrations
-```
-
----
-
-## 6. Demo flow
-
-1. Select a scenario (REQ-001 / REQ-002 / REQ-003) or enter a custom request
-2. Click **Start Procurement**
-3. Watch the agent pipeline run: extraction → supplier matching → negotiation → validation
-4. Review the negotiation timeline and validation table
-5. Respond to the human escalation question (Approve / Reject)
-6. See the audit summary and final recommendation
-
----
-
-## 7. Branches
-
-| Branch | Purpose |
-|--------|---------|
-| `main` | Stable — run the final demo from here |
-| `staging-demo` | Integration testing — merge feature branches here first |
-| `staging-ui-philipp` | Source of the `frontend/` Next.js prototype |
-| `feature/orchestrator-agents` | Backend agents and orchestration |
-| `feature/integrations-data` | Pioneer, Tavily, fal, synthetic data |
-
-Always demo from `main`. Merge through `staging-demo` first.
