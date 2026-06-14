@@ -659,7 +659,6 @@ export function FalNode({ data }: NodeProps<StateProps>) {
 
 export function SellerNode({
   data,
-  id,
 }: NodeProps<{
   label: string;
   match: number;
@@ -669,10 +668,6 @@ export function SellerNode({
   selected?: boolean;
   interactive?: boolean;
   chatLines?: ConversationLog[];
-  showDecideButtons?: boolean;
-  onApprove?: (sellerId: string) => void;
-  onReject?: (sellerId: string) => void;
-  onNegotiate?: (sellerId: string) => void;
 }>) {
   const chatLines = data.chatLines ?? [];
   const hasChatLines = chatLines.length > 0;
@@ -804,34 +799,105 @@ export function SellerNode({
         )}
       </AnimatePresence>
 
-      {/* Approve/Reject/Negotiate buttons — shown during negotiation stage */}
-      {data.showDecideButtons && hasChatLines && (
-        <motion.div
-          initial={{ opacity: 0, height: 0 }}
-          animate={{ opacity: 1, height: "auto" }}
-          exit={{ opacity: 0, height: 0 }}
-          transition={{ duration: 0.2 }}
-          className="border-t border-border bg-surface/50 p-2 flex gap-1.5"
-        >
-          <button
-            onClick={() => data.onApprove?.(id)}
-            className="flex-1 rounded-lg bg-success px-2 py-1.5 text-[10px] font-semibold text-white transition-all hover:bg-success/90 active:scale-[0.96]"
-          >
-            Approve
-          </button>
-          <button
-            onClick={() => data.onReject?.(id)}
-            className="flex-1 rounded-lg bg-danger px-2 py-1.5 text-[10px] font-semibold text-white transition-all hover:bg-danger/90 active:scale-[0.96]"
-          >
-            Reject
-          </button>
-          <button
-            onClick={() => data.onNegotiate?.(id)}
-            className="flex-1 rounded-lg bg-accent px-2 py-1.5 text-[10px] font-semibold text-white transition-all hover:bg-accent/90 active:scale-[0.96]"
-          >
-            Negotiate
-          </button>
-        </motion.div>
+    </motion.div>
+  );
+}
+
+// Decision Node — appears next to a seller when human approval is needed
+import { useState } from "react";
+import type { EscalationResult } from "@/lib/types";
+
+export function DecisionNode({
+  data,
+}: NodeProps<{
+  payload: EscalationResult | null;
+  onDecide?: (d: "approved" | "rejected" | "renegotiate" | "restart", note?: string) => void;
+}>) {
+  const [showInput, setShowInput] = useState(false);
+  const [note, setNote] = useState("");
+
+  if (!data.payload) return null;
+
+  const noOffer = data.payload.trigger === "no_compatible_offer";
+  const canRenegotiate = !noOffer && !data.payload.renegotiate_used && data.payload.has_winning_offer !== false;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, scale: 0.94, y: 6 }}
+      animate={{ opacity: 1, scale: 1, y: 0 }}
+      transition={{ duration: 0.18, ease: EASE_OUT }}
+      style={{ width: 180 }}
+      className="rounded-xl border border-border bg-white p-3 shadow-[var(--shadow-md)]"
+    >
+      <Handle type="target" position={Position.Left} className="opacity-0" />
+
+      <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-text-3">
+        Decision
+      </p>
+      <p className="mt-1 text-[11.5px] leading-snug text-text-1">
+        {data.payload.question_for_human}
+      </p>
+
+      {showInput ? (
+        <div className="mt-3">
+          <textarea
+            autoFocus
+            value={note}
+            onChange={e => setNote(e.target.value)}
+            placeholder="Your adjustment…"
+            rows={2}
+            className="w-full resize-none rounded-lg border border-border bg-surface px-2.5 py-2 text-[11px] text-text-1 placeholder:text-text-3 focus:border-text-2 focus:outline-none"
+          />
+          <div className="mt-2 flex gap-1.5">
+            <button
+              onClick={() => { setShowInput(false); setNote(""); }}
+              className="h-8 flex-1 rounded-lg border border-border text-[11px] text-text-2 transition-transform active:scale-[0.97]"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => data.onDecide?.("renegotiate", note.trim())}
+              disabled={!note.trim()}
+              className="h-8 flex-1 rounded-lg bg-text-1 text-[11px] font-semibold text-white transition-transform active:scale-[0.97] disabled:opacity-40"
+            >
+              Send
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-3 flex flex-col gap-1.5">
+          {noOffer ? (
+            <button
+              onClick={() => data.onDecide?.("restart")}
+              className="h-8 w-full rounded-lg bg-text-1 text-[11px] font-semibold text-white transition-transform active:scale-[0.97]"
+            >
+              New Search
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={() => data.onDecide?.("approved")}
+                className="h-8 w-full rounded-lg bg-text-1 text-[11px] font-semibold text-white transition-transform active:scale-[0.97]"
+              >
+                Approve
+              </button>
+              {canRenegotiate && (
+                <button
+                  onClick={() => setShowInput(true)}
+                  className="h-8 w-full rounded-lg border border-border text-[11px] text-text-2 transition-transform hover:border-text-2 active:scale-[0.97]"
+                >
+                  Negotiate
+                </button>
+              )}
+              <button
+                onClick={() => data.onDecide?.("rejected")}
+                className="h-8 w-full rounded-lg border border-border text-[11px] text-text-2 transition-transform hover:border-text-2 active:scale-[0.97]"
+              >
+                Reject
+              </button>
+            </>
+          )}
+        </div>
       )}
     </motion.div>
   );

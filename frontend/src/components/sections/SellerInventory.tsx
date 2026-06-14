@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { SectionHeader } from "@/components/primitives/SectionHeader";
-import { getSellerInventory } from "@/lib/api";
+import { displayName, getSellerInventory } from "@/lib/api";
 import type { SellerProduct } from "@/lib/types";
 
 export function SellerInventorySection() {

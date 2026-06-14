@@ -83,7 +83,7 @@ export function ActivityFeed({ items, demoMode }: Props) {
         {items.length === 0 ? (
           <EmptyState />
         ) : (
-          <ol className="flex flex-col gap-2">
+          <ol className="flex flex-col gap-3">
             <AnimatePresence initial={false}>
               {items.map((item) => (
                 <motion.li
@@ -107,7 +107,13 @@ export function ActivityFeed({ items, demoMode }: Props) {
   );
 }
 
-function FeedRow({ item, startTs }: { item: FeedItem; startTs?: number }) {
+function FeedRow({
+  item,
+  startTs,
+}: {
+  item: FeedItem;
+  startTs?: number;
+}) {
   const meta = agentMeta[item.agent];
   const elapsed =
     item.ts !== undefined && startTs !== undefined && item.ts > startTs

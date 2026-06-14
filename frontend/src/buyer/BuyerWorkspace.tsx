@@ -15,7 +15,6 @@ import { StageStrip } from "@/components/shell/StageStrip";
 import { AgentNetwork } from "@/components/hero/AgentNetwork";
 import { RequestForm } from "@/components/input/RequestForm";
 import { ActivityFeed, type FeedItem } from "@/components/feed/ActivityFeed";
-import { EscalationModal } from "@/components/modals/EscalationModal";
 import { DecisionScreen } from "@/components/screens/DecisionScreen";
 import {
   initialStatus,
@@ -55,9 +54,6 @@ export function BuyerWorkspace({ onLogout, accountLabel = "Horizon Analytics Gmb
   const [requestLabel, setRequestLabel] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
 
-  // Streaming-specific state
-  const [escalationAlert, setEscalationAlert] = useState<EscalationResult | null>(null);
-
   // Dynamic node visibility driven by real events
   const [visibleNodeIds, setVisibleNodeIds] = useState<Set<string>>(new Set());
   const [nodeChatLines, setNodeChatLines] = useState<Record<string, ConversationLog[]>>({});
@@ -65,9 +61,16 @@ export function BuyerWorkspace({ onLogout, accountLabel = "Horizon Analytics Gmb
   const [liveSuppliers, setLiveSuppliers] = useState<MatchedSupplier[]>([]);
   const [liveJudgedCandidates, setLiveJudgedCandidates] = useState<JudgedCandidate[]>([]);
 
+  // Decision node state
+  const [activeEscalation, setActiveEscalation] = useState<{
+    payload: EscalationResult;
+    sellerId: string;
+  } | null>(null);
+
   const sessionIdRef = useRef<string | null>(null);
   const streamCleanupRef = useRef<(() => void) | null>(null);
   const chosenStrategyRef = useRef<NegotiationStrategy>("medium");
+  const lastNegotiationSellerRef = useRef<string>("");
   const stepRef = useRef<HTMLDivElement>(null);
 
   // GSAP curtain-wipe between steps
@@ -110,7 +113,7 @@ export function BuyerWorkspace({ onLogout, accountLabel = "Horizon Analytics Gmb
     setRequestLabel("");
     setVisibleNodeIds(new Set());
     setNodeChatLines({});
-    setEscalationAlert(null);
+    setActiveEscalation(null);
   }, []);
 
   const logout = useCallback(() => {
@@ -268,6 +271,7 @@ export function BuyerWorkspace({ onLogout, accountLabel = "Horizon Analytics Gmb
           return next;
         });
         if (log.seller_id && log.speaker !== "system") {
+          lastNegotiationSellerRef.current = log.seller_id;
           setNodeChatLines((prev) => ({
             ...prev,
             [log.seller_id]: [...(prev[log.seller_id] ?? []), log],
@@ -321,14 +325,15 @@ export function BuyerWorkspace({ onLogout, accountLabel = "Horizon Analytics Gmb
             renegotiate_used: d.renegotiate_used,
             has_winning_offer: d.has_winning_offer,
           };
-          setEscalationAlert(escalation);
+          const decisionSellerId = lastNegotiationSellerRef.current;
+          setActiveEscalation({ payload: escalation, sellerId: decisionSellerId });
+          setVisibleNodeIds(prev => new Set([...prev, `decision-${decisionSellerId}`]));
           setStatus((s) => ({ ...s, phase: "awaiting_approval", stageIndex: Math.max(s.stageIndex, 4) }));
           reveal(STAGE_REVEALS["escalate"]);
           pushFeed({
             id: `escalate-alert-${Date.now()}`,
             agent: "escalation",
-            title: "Human decision required",
-            detail: d.question,
+            title: "Awaiting your decision…",
           });
         }
         break;
@@ -455,7 +460,6 @@ export function BuyerWorkspace({ onLogout, accountLabel = "Horizon Analytics Gmb
       setNodeChatLines({});
       setLiveSuppliers([]);
       setLiveJudgedCandidates([]);
-      setEscalationAlert(null);
 
       // Immediate label from the raw request; refined once `requirements` arrives
       const words = req.raw_request.trim().split(/\s+/);
@@ -488,13 +492,21 @@ export function BuyerWorkspace({ onLogout, accountLabel = "Horizon Analytics Gmb
   }, []);
 
   const handleDecide = useCallback(async (d: "approved" | "rejected" | "renegotiate" | "restart", note?: string) => {
+    // Remove decision node from visible set
+    if (activeEscalation) {
+      setVisibleNodeIds(prev => {
+        const next = new Set(prev);
+        next.delete(`decision-${activeEscalation.sellerId}`);
+        return next;
+      });
+      setActiveEscalation(null);
+    }
+
     if (d === "restart") {
-      setEscalationAlert(null);
       reset();
       return;
     }
     if (d === "renegotiate") {
-      setEscalationAlert(null);
       // Drop stage back to "negotiate" so the AgentNetwork camera refocuses
       // on the seller chat panels — otherwise new turns silently append while
       // the view is parked on Escalate.
@@ -510,7 +522,6 @@ export function BuyerWorkspace({ onLogout, accountLabel = "Horizon Analytics Gmb
       return;
     }
     setDecision(d);
-    setEscalationAlert(null);
     setStatus((s) => ({ ...s, phase: d === "approved" ? "approved" : "rejected" }));
     const sid = sessionIdRef.current;
     if (sid) {
@@ -648,25 +659,22 @@ export function BuyerWorkspace({ onLogout, accountLabel = "Horizon Analytics Gmb
                   chatLines={nodeChatLines}
                   requestLabel={requestLabel}
                   judgedCandidates={result?.judged_candidates ?? liveJudgedCandidates}
+                  escalation={activeEscalation}
+                  onEscalationDecide={handleDecide}
                 />
               </div>
 
               <div className="flex w-72 shrink-0 flex-col bg-white">
                 <div className="min-h-0 flex-1">
-                  <ActivityFeed items={feed} demoMode={result?.demo_mode} />
+                  <ActivityFeed
+                    items={feed}
+                    demoMode={result?.demo_mode}
+                  />
                 </div>
               </div>
             </div>
 
           </div>
-
-          {/* Escalation modal — shown on approval_required alert */}
-          {escalationAlert && decision === null && (
-            <EscalationModal
-              data={escalationAlert}
-              onDecide={(d, note) => handleDecide(d, note)}
-            />
-          )}
 
           <div className="flex h-12 shrink-0 items-center justify-between border-t border-border bg-white px-8">
             <button

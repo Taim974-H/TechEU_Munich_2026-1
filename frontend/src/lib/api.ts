@@ -3,7 +3,7 @@ import { supabase } from "./supabase";
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-export function displayName(name: string): string {
+export function displayName(name: string | undefined): string {
   const m = name?.match(/^Vendor [A-G] \((.+)\)$/);
   return m ? m[1] : (name ?? "");
 }

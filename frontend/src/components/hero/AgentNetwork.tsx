@@ -13,6 +13,7 @@ import {
   AuditNode,
   BuyerAgentNode,
   ClusteringNode,
+  DecisionNode,
   FalNode,
   JudgingWallNode,
   MatchingNode,
@@ -26,7 +27,7 @@ import {
   TavilyNode,
 } from "./nodes";
 import { MessageEdge } from "./MessageEdge";
-import type { ConversationLog, JudgedCandidate, MatchedSupplier } from "@/lib/types";
+import type { ConversationLog, EscalationResult, JudgedCandidate, MatchedSupplier } from "@/lib/types";
 import { displayName } from "@/lib/api";
 
 interface Props {
@@ -40,10 +41,8 @@ interface Props {
   chatLines: Record<string, ConversationLog[]>;
   requestLabel?: string;
   judgedCandidates?: JudgedCandidate[];
-  showDecideButtons?: boolean;
-  onApproveSupplier?: (sellerId: string) => void;
-  onRejectSupplier?: (sellerId: string) => void;
-  onNegotiateSupplier?: (sellerId: string) => void;
+  escalation?: { payload: EscalationResult; sellerId: string } | null;
+  onEscalationDecide?: (d: "approved" | "rejected" | "renegotiate" | "restart", note?: string) => void;
 }
 
 const nodeTypes = {
@@ -62,6 +61,7 @@ const nodeTypes = {
   // backwards-compat alias kept in case anything references it by string
   buyerAgent: BuyerAgentNode,
   seller: SellerNode,
+  decision: DecisionNode,
 };
 
 const edgeTypes = {
@@ -79,10 +79,8 @@ export function AgentNetwork({
   chatLines,
   requestLabel = "New Request",
   judgedCandidates = [],
-  showDecideButtons = false,
-  onApproveSupplier,
-  onRejectSupplier,
-  onNegotiateSupplier,
+  escalation,
+  onEscalationDecide,
 }: Props) {
   const { nodes, edges } = useMemo(() => {
     const orchActive = stageIndex >= 0 && stageIndex < 6;
@@ -145,8 +143,9 @@ export function AgentNetwork({
       subagents:    1400,  // fan out above/below negotiation
       sellers:      1690,
       pioneer:      1690,  // below sellers column
-      audit:        1990,
-      fal:          1990,  // below audit
+      decision:     1990,  // decision nodes next to sellers
+      audit:        2300,  // audit summary further right
+      fal:          2300,  // below audit
     };
     const SELLER_SPACING = 300;
     const sellersTopY = CY - ((sellers.length - 1) * SELLER_SPACING) / 2;
@@ -233,10 +232,17 @@ export function AgentNetwork({
           selected: canInteract && s.seller_id === activeSeller,
           interactive: canInteract,
           chatLines: chatLines[s.seller_id] ?? [],
-          showDecideButtons: showDecideButtons && stageIndex >= 2,
-          onApprove: onApproveSupplier,
-          onReject: onRejectSupplier,
-          onNegotiate: onNegotiateSupplier,
+        },
+        draggable: false,
+        selectable: false,
+      })),
+      ...sellers.map<Node>((s, i) => ({
+        id: `decision-${s.seller_id}`,
+        type: "decision",
+        position: { x: COL.decision, y: sellersTopY + i * SELLER_SPACING },
+        data: {
+          payload: escalation?.sellerId === s.seller_id ? escalation.payload : null,
+          onDecide: escalation?.sellerId === s.seller_id ? onEscalationDecide : undefined,
         },
         draggable: false,
         selectable: false,
@@ -322,6 +328,14 @@ export function AgentNetwork({
       // Pioneer → audit, audit → fal (sequential post-negotiation pipeline)
       { id: "pioneer-audit", source: "pioneer", target: "audit", type: "smoothstep", style: liveStyle(auditActive || auditDone) },
       { id: "audit-fal",     source: "audit",   target: "fal",   type: "smoothstep", style: liveStyle(falActive || falDone) },
+      // Decision nodes — thin dashed edges from seller to decision
+      ...sellers.map<Edge>((s) => ({
+        id: `dec-${s.seller_id}`,
+        source: s.seller_id,
+        target: `decision-${s.seller_id}`,
+        type: "smoothstep",
+        style: { stroke: "#d1d5db", strokeWidth: 1, strokeDasharray: "4 3" },
+      })),
     ];
 
     // Only show nodes that have been revealed; only draw edges where both ends are visible
@@ -341,6 +355,8 @@ export function AgentNetwork({
     chatLines,
     requestLabel,
     judgedCandidates,
+    escalation,
+    onEscalationDecide,
   ]);
 
   const totalChatLines = useMemo(

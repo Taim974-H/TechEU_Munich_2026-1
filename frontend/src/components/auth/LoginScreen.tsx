@@ -107,8 +107,8 @@ export function LoginScreen({ onLogin }: Props) {
             transition={{ duration: 0.5, delay: 0.18, ease: [0.23, 1, 0.32, 1] }}
             className="mt-6 text-[clamp(3rem,4.5vw,5.5rem)] font-bold leading-[0.88] tracking-[-0.04em] text-white"
           >
-            Root<br />
-            <span className="text-white/35">Workspace.</span>
+            Procurement<br />
+            <span className="text-white/35">Command Center.</span>
           </motion.h1>
 
           <motion.p
@@ -173,7 +173,7 @@ export function LoginScreen({ onLogin }: Props) {
             Sign In
           </p>
           <h2 className="text-[24px] font-bold tracking-tight text-text-1">
-            Enter the root workspace
+            Enter the command center
           </h2>
           <p className="mt-2 text-[13px] leading-relaxed text-text-2">
             Use root/root for full access, or buyer/123 and seller/123 for role-specific access.
