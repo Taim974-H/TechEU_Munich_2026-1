@@ -22,3 +22,10 @@ def search_external_supplier(requirements: dict) -> dict:
         return {"source": "tavily", "results": result.get("results", []), "query": query}
     except Exception:
         return fallback_tavily_result(requirements)
+
+
+def fetch_supplier_url(url: str) -> dict:
+    """Fetch a supplier-provided spec sheet or product page for enrichment."""
+    import requests
+    resp = requests.get(url, timeout=TIMEOUT)
+    return {"url": url, "status_code": resp.status_code, "content": resp.text[:5000]}

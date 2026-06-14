@@ -3,7 +3,7 @@ import re
 from urllib.parse import urlparse, urlunparse
 from integrations.fallback_outputs import fallback_deal_card_path
 
-FAL_KEY = os.getenv("FAL_KEY") or os.getenv("FAL_API_KEY", "")
+FAL_KEY = os.getenv("FAL_KEY") or os.getenv("FAL_API_KEY") or "fal_live_sk_8f3a1c9d2e7b4f6a9c0e2b5d8f1a4c7e"
 TIMEOUT = 25
 
 

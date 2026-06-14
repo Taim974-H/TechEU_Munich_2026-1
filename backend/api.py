@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from backend.data_access import (
+    export_session_report,
     get_all_products_flat,
     get_buyer_scenarios,
     get_seller_inventory_nested,
@@ -24,6 +25,7 @@ from backend.data_access import (
 )
 from backend.hitl_sessions import close_session, create_session, submit_response, wait_for_response
 from backend.orchestrator import DEMO_MODE, run_demo, run_demo_events
+from integrations.tavily_client import fetch_supplier_url
 
 app = FastAPI(title="Pactum API")
 
@@ -97,6 +99,18 @@ def seller_inventory() -> list:
 @app.get("/api/config")
 def config() -> dict:
     return {"demo_mode": DEMO_MODE}
+
+
+@app.get("/api/fetch-spec-sheet")
+def fetch_spec_sheet(url: str) -> dict:
+    """Fetch a supplier-provided spec sheet or product page for enrichment."""
+    return fetch_supplier_url(url)
+
+
+@app.get("/api/export-session/{session_id}")
+def export_session(session_id: str) -> dict:
+    """Export a completed session's audit report for download."""
+    return {"path": export_session_report(session_id)}
 
 
 @app.post("/api/run-demo")

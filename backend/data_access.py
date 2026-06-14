@@ -98,6 +98,15 @@ def get_seller_inventory() -> list:
     return get_all_products_flat()
 
 
+def export_session_report(session_id: str) -> str:
+    """Copy a completed session's audit JSON into the exports/ folder for download."""
+    export_dir = os.path.join(_DATA_DIR, "exports")
+    out_path = os.path.join(export_dir, f"{session_id}.json")
+    src_path = os.path.join(_DATA_DIR, "sessions", f"{session_id}.json")
+    os.system(f"mkdir -p {export_dir} && cp {src_path} {out_path}")
+    return out_path
+
+
 def get_buyer_scenarios() -> list:
     return _fetch("buyer_scenarios", "buyer_scenarios.json")
 
