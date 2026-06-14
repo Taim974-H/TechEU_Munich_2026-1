@@ -819,6 +819,7 @@ export function DecisionNode({
   const [showInput, setShowInput] = useState(false);
   const [note, setNote] = useState("");
 
+  // Don't render if no payload (negotiation not ready yet)
   if (!data.payload) return null;
 
   const noOffer = data.payload.trigger === "no_compatible_offer";
@@ -829,17 +830,19 @@ export function DecisionNode({
       initial={{ opacity: 0, scale: 0.94, y: 6 }}
       animate={{ opacity: 1, scale: 1, y: 0 }}
       transition={{ duration: 0.18, ease: EASE_OUT }}
-      style={{ width: 180 }}
+      style={{ width: 200 }}
       className="rounded-xl border border-border bg-white p-3 shadow-[var(--shadow-md)]"
     >
       <Handle type="target" position={Position.Left} className="opacity-0" />
 
-      <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-text-3">
-        Decision
-      </p>
-      <p className="mt-1 text-[11.5px] leading-snug text-text-1">
-        {data.payload.question_for_human}
-      </p>
+      <div className="mb-2">
+        <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-accent mb-1">
+          Ready
+        </p>
+        <p className="text-[12px] font-semibold leading-snug text-text-1">
+          {data.payload.question_for_human}
+        </p>
+      </div>
 
       {showInput ? (
         <div className="mt-3">
