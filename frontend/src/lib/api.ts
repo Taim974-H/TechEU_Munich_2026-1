@@ -1,4 +1,5 @@
-import type { BuyerRequest, DemoResult, SellerProduct } from "./types";
+import type { BuyerRequest, DemoResult } from "./types";
+import { supabase } from "./supabase";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -25,38 +26,20 @@ export interface BuyerScenario {
 }
 
 export async function getScenarios(): Promise<BuyerScenario[]> {
+  if (supabase) {
+    const { data, error } = await supabase
+      .from("buyer_scenarios")
+      .select("request_id, raw_request, region, priority, structured_requirements")
+      .order("created_at", { ascending: true });
+
+    if (!error && data) {
+      return data;
+    }
+  }
+
   const res = await fetch(`${API_BASE}/api/scenarios`);
   if (!res.ok) {
     throw new Error(`scenarios failed: ${res.status} ${res.statusText}`);
   }
   return res.json();
-}
-
-export async function getSellerInventory(): Promise<SellerProduct[]> {
-  const res = await fetch(`${API_BASE}/api/seller-inventory`);
-  if (!res.ok) {
-    throw new Error(`seller-inventory failed: ${res.status} ${res.statusText}`);
-  }
-  const data = await res.json();
-  return Array.isArray(data) ? data : flattenNestedInventory(data);
-}
-
-function flattenNestedInventory(data: unknown): SellerProduct[] {
-  if (!data || typeof data !== "object" || !("merchants" in data)) return [];
-  const merchants = (data as { merchants?: unknown[] }).merchants ?? [];
-  return merchants.flatMap((merchant) => {
-    if (!merchant || typeof merchant !== "object") return [];
-    const m = merchant as {
-      seller_id?: string;
-      seller_name?: string;
-      inventories?: { products?: SellerProduct[] }[];
-    };
-    return (m.inventories ?? []).flatMap((inventory) =>
-      (inventory.products ?? []).map((product) => ({
-        ...product,
-        seller_id: m.seller_id ?? product.seller_id,
-        seller_name: m.seller_name ?? product.seller_name,
-      })),
-    );
-  });
 }

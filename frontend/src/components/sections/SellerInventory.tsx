@@ -88,7 +88,7 @@ function SellerCard({
             <tr key={p.id ?? `${p.seller_id}-${p.product}`} className="border-t border-border/60">
               <td className="py-1.5 pr-2 font-medium text-text-1">{p.product}</td>
               <td className="py-1.5 pr-2 font-mono tabular-nums">
-                {formatSpecs(p)}
+                {p.length_mm}mm · {p.power_watts}W · {p.warranty_years}y warranty
               </td>
               <td className="py-1.5 pr-2 font-mono tabular-nums">€{p.price_eur}</td>
               <td className="py-1.5 pr-2 font-mono tabular-nums">{p.delivery_days}d</td>
@@ -109,14 +109,4 @@ function SellerCard({
       </table>
     </article>
   );
-}
-
-function formatSpecs(product: SellerProduct): string {
-  return [
-    typeof product.length_mm === "number" ? `${product.length_mm}mm` : null,
-    typeof product.power_watts === "number" ? `${product.power_watts}W` : null,
-    `${product.warranty_years}y warranty`,
-  ]
-    .filter(Boolean)
-    .join(" · ");
 }

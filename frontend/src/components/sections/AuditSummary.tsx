@@ -2,12 +2,38 @@
 
 import { Notebook } from "@phosphor-icons/react";
 import { SectionHeader } from "@/components/primitives/SectionHeader";
+import type { ValidationResult } from "@/lib/types";
 
 interface Props {
   summary: string;
+  results?: ValidationResult[];
 }
 
-export function AuditSummary({ summary }: Props) {
+function buildBullets(results: ValidationResult[]) {
+  const passed = results.filter((r) => r.status === "passed").length;
+  const negotiable = results.filter((r) => r.status === "negotiable").length;
+  const rejected = results.filter((r) => r.status === "rejected").length;
+  const missing = results.filter((r) => r.status === "missing_information").length;
+
+  const bullets: { color: string; label: string }[] = [];
+  if (passed > 0)
+    bullets.push({ color: "bg-success", label: `${passed} seller${passed !== 1 ? "s" : ""} passed validation` });
+  if (negotiable > 0)
+    bullets.push({ color: "bg-warning", label: `${negotiable} seller${negotiable !== 1 ? "s" : ""} negotiable` });
+  if (rejected > 0) {
+    const failedConstraints = results
+      .filter((r) => r.status === "rejected")
+      .flatMap((r) => r.failed_constraints).length;
+    bullets.push({ color: "bg-danger", label: `${rejected} offer${rejected !== 1 ? "s" : ""} rejected (${failedConstraints} constraint${failedConstraints !== 1 ? "s" : ""})` });
+  }
+  if (missing > 0)
+    bullets.push({ color: "bg-text-3", label: `${missing} with missing information` });
+  return bullets;
+}
+
+export function AuditSummary({ summary, results }: Props) {
+  const bullets = results ? buildBullets(results) : null;
+
   return (
     <div className="rounded-2xl border border-border bg-surface p-5 shadow-sm">
       <SectionHeader
@@ -22,19 +48,22 @@ export function AuditSummary({ summary }: Props) {
         }
       />
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-        <div className="lg:col-span-8">
+        <div className={bullets && bullets.length > 0 ? "lg:col-span-8" : "lg:col-span-12"}>
           <p className="max-w-[68ch] text-[13.5px] leading-relaxed text-text-1">
             {summary}
           </p>
         </div>
-        <div className="lg:col-span-4">
-          <ul className="flex flex-col gap-2 rounded-xl border border-border bg-surface-2/50 px-4 py-3 text-[12px] text-text-2">
-            <Bullet color="bg-success">2 sellers passed validation</Bullet>
-            <Bullet color="bg-warning">1 seller negotiable (warranty)</Bullet>
-            <Bullet color="bg-danger">1 offer rejected (3 constraints)</Bullet>
-            <Bullet color="bg-text-3">2 sellers had no compliant offer</Bullet>
-          </ul>
-        </div>
+        {bullets && bullets.length > 0 && (
+          <div className="lg:col-span-4">
+            <ul className="flex flex-col gap-2 rounded-xl border border-border bg-surface-2/50 px-4 py-3 text-[12px] text-text-2">
+              {bullets.map((b) => (
+                <Bullet key={b.label} color={b.color}>
+                  {b.label}
+                </Bullet>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
     </div>
   );

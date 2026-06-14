@@ -4,10 +4,11 @@ import {
   ReactFlow,
   Background,
   BackgroundVariant,
+  useReactFlow,
   type Node,
   type Edge,
 } from "@xyflow/react";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useMemo } from "react";
 import {
   BuyerAgentNode,
   OrchestratorNode,
@@ -15,12 +16,7 @@ import {
   SellerNode,
 } from "./nodes";
 import { MessageEdge } from "./MessageEdge";
-import type {
-  ConversationLog,
-  FinalRecommendation,
-  MatchedSupplier,
-  StructuredRequirements,
-} from "@/lib/types";
+import type { ConversationLog, MatchedSupplier } from "@/lib/types";
 
 interface Props {
   stageIndex: number;
@@ -29,9 +25,8 @@ interface Props {
   onSelectSeller: (sellerId: string) => void;
   canInteract: boolean;
   suppliers: MatchedSupplier[];
-  conversationLogs?: ConversationLog[];
-  requirements?: StructuredRequirements | null;
-  recommendation?: FinalRecommendation | null;
+  visibleNodeIds: Set<string>;
+  chatLines: Record<string, ConversationLog[]>;
 }
 
 const nodeTypes = {
@@ -52,12 +47,9 @@ export function AgentNetwork({
   onSelectSeller,
   canInteract,
   suppliers,
-  conversationLogs = [],
-  requirements = null,
-  recommendation = null,
+  visibleNodeIds,
+  chatLines,
 }: Props) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [hover, setHover] = useState<{ sellerId: string; x: number; y: number } | null>(null);
   const { nodes, edges } = useMemo(() => {
     const requestActive = stageIndex === 0;
     const orchActive = stageIndex >= 0 && stageIndex <= 1;
@@ -66,28 +58,32 @@ export function AgentNetwork({
     const negotiateDone = stageIndex > 2;
 
     const bestSellerId = suppliers.length
-      ? [...suppliers].sort((a, b) => b.match_score - a.match_score)[0]
-          .seller_id
+      ? [...suppliers].sort((a, b) => b.match_score - a.match_score)[0].seller_id
       : "";
 
     const sellers = [...suppliers].sort((a, b) =>
       a.seller_id.localeCompare(b.seller_id),
     );
 
-    // Clean horizontal pipeline: Request → Orchestrator → BuyerAgent → 5 Sellers
-    const COL = { request: 20, orchestrator: 230, buyer: 460, sellers: 720 };
-    const ROW_CENTER = 130;
-    const SELLER_SPACING = 58;
-    const sellersTopY =
-      ROW_CENTER - ((sellers.length - 1) * SELLER_SPACING) / 2;
+    // Current round from chat lines (max round seen)
+    const maxRound = Object.values(chatLines).reduce((max, lines) => {
+      const r = lines.reduce((m, l) => Math.max(m, l.round), 0);
+      return Math.max(max, r);
+    }, 0);
 
-    const nodes: Node[] = [
+    const COL = { request: 20, orchestrator: 280, buyer: 570, sellers: 860 };
+    const ROW_CENTER = 300;
+    // 280px spacing: accommodates 60px header + 180px chat + 40px gap
+    const SELLER_SPACING = 280;
+    const sellersTopY = ROW_CENTER - ((sellers.length - 1) * SELLER_SPACING) / 2;
+
+    const allNodes: Node[] = [
       {
         id: "request",
         type: "request",
         position: { x: COL.request, y: ROW_CENTER },
         data: {
-          label: requestNodeLabel(requirements),
+          label: "GPU · €650",
           active: requestActive,
           done: stageIndex > 0,
         },
@@ -97,8 +93,8 @@ export function AgentNetwork({
       {
         id: "orchestrator",
         type: "orchestrator",
-        position: { x: COL.orchestrator, y: ROW_CENTER - 22 },
-        data: { active: orchActive, done: orchDone },
+        position: { x: COL.orchestrator, y: ROW_CENTER - 24 },
+        data: { active: orchActive, done: orchDone, stageIndex },
         draggable: false,
         selectable: false,
       },
@@ -106,7 +102,11 @@ export function AgentNetwork({
         id: "buyerAgent",
         type: "buyerAgent",
         position: { x: COL.buyer, y: ROW_CENTER },
-        data: { active: negotiateActive, done: negotiateDone },
+        data: {
+          active: negotiateActive,
+          done: negotiateDone,
+          round: negotiateActive && maxRound > 0 ? maxRound : undefined,
+        },
         draggable: false,
         selectable: false,
       },
@@ -122,6 +122,7 @@ export function AgentNetwork({
           done: negotiateDone,
           selected: canInteract && s.seller_id === activeSeller,
           interactive: canInteract,
+          chatLines: chatLines[s.seller_id] ?? [],
         },
         draggable: false,
         selectable: false,
@@ -129,12 +130,13 @@ export function AgentNetwork({
     ];
 
     const liveStyle = (live: boolean) => ({
-      stroke: live ? "var(--accent)" : "#d6d3ce",
-      strokeWidth: live ? 1.6 : 1,
+      stroke: live ? "var(--accent)" : "#d1d5db",
+      strokeWidth: live ? 1.8 : 1.2,
       strokeOpacity: live ? 0.9 : 0.55,
+      strokeDasharray: live ? undefined : "5 4",
     });
 
-    const edges: Edge[] = [
+    const allEdges: Edge[] = [
       {
         id: "r-o",
         source: "request",
@@ -149,7 +151,6 @@ export function AgentNetwork({
         type: "smoothstep",
         style: liveStyle(stageIndex >= 1 && stageIndex <= 2),
       },
-      // Buyer Agent → Sellers — custom MessageEdge with staggered traveling dot
       ...sellers.map<Edge>((s, i) => ({
         id: `ba-${s.seller_id}`,
         source: "buyerAgent",
@@ -160,16 +161,23 @@ export function AgentNetwork({
       })),
     ];
 
-    return { nodes, edges };
-  }, [stageIndex, activeSeller, canInteract, suppliers, requirements]);
+    // Filter to only currently visible nodes; edges only if both endpoints visible
+    const nodes = allNodes.filter((n) => visibleNodeIds.has(n.id));
+    const visibleSet = new Set(nodes.map((n) => n.id));
+    const edges = allEdges.filter(
+      (e) => visibleSet.has(e.source) && visibleSet.has(e.target),
+    );
 
-  const hoverLog = hover ? lastLogForSeller(conversationLogs, hover.sellerId) : null;
+    return { nodes, edges };
+  }, [stageIndex, activeSeller, canInteract, suppliers, visibleNodeIds, chatLines]);
+
+  const totalChatLines = useMemo(
+    () => Object.values(chatLines).reduce((sum, lines) => sum + lines.length, 0),
+    [chatLines],
+  );
 
   return (
-    <div
-      ref={containerRef}
-      className="relative h-[340px] overflow-hidden rounded-2xl border border-border bg-gradient-to-b from-white to-surface-2/60 shadow-[var(--shadow-tinted)]"
-    >
+    <div className="relative h-full overflow-hidden border border-border bg-white shadow-[var(--shadow-sm)]">
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -178,209 +186,109 @@ export function AgentNetwork({
         nodesDraggable={false}
         nodesConnectable={false}
         elementsSelectable={false}
-        panOnDrag={false}
+        panOnDrag={true}
         panOnScroll={false}
-        zoomOnScroll={false}
-        zoomOnPinch={false}
+        zoomOnScroll={true}
+        zoomOnPinch={true}
         zoomOnDoubleClick={false}
         proOptions={{ hideAttribution: true }}
         fitView
-        fitViewOptions={{ padding: 0.14, minZoom: 0.7, maxZoom: 1.05 }}
+        fitViewOptions={{ padding: 0.18, minZoom: 0.35, maxZoom: 1.4 }}
         onNodeClick={(_event, node) => {
           if (canInteract && node.type === "seller") {
             onSelectSeller(node.id);
           }
         }}
-        onEdgeMouseEnter={(event, edge) => {
-          if (!edge.id.startsWith("ba-")) return;
-          const rect = containerRef.current?.getBoundingClientRect();
-          if (!rect) return;
-          setHover({
-            sellerId: edge.id.slice(3),
-            x: event.clientX - rect.left,
-            y: event.clientY - rect.top,
-          });
-        }}
-        onEdgeMouseLeave={() => setHover(null)}
       >
         <Background
           variant={BackgroundVariant.Dots}
           gap={22}
-          size={1}
-          color="#e4e2dc"
+          size={1.2}
+          color="#d1d5db"
         />
+        <FlowAutoFit nodeCount={nodes.length} totalChatLines={totalChatLines} />
       </ReactFlow>
 
       <div className="pointer-events-none absolute left-5 top-4 flex flex-col gap-0.5">
-        <div className="text-[10.5px] font-medium uppercase tracking-[0.16em] text-text-3">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-3">
           Live Agent Network
         </div>
         <div className="text-[13px] font-medium tracking-tight text-text-1">
-          Orchestrator routes · Buyer Agent negotiates with{" "}
-          {suppliers.length || "matched"} seller
-          {suppliers.length === 1 ? "" : "s"}
+          {nodes.length === 0 ? "Starting pipeline…" : `${nodes.length} node${nodes.length !== 1 ? "s" : ""} active`}
         </div>
       </div>
 
-      {hoverLog && (
-        <EdgeDetailPopup log={hoverLog} x={hover!.x} y={hover!.y} />
-      )}
-
-      <LiveTicker
-        stageIndex={stageIndex}
-        phase={phase}
-        suppliers={suppliers}
-        conversationLogs={conversationLogs}
-        recommendation={recommendation}
-        activeSeller={activeSeller}
-      />
+      <LiveTicker stageIndex={stageIndex} phase={phase} />
     </div>
   );
 }
 
-function lastLogForSeller(
-  logs: ConversationLog[],
-  sellerId: string,
-): ConversationLog | null {
-  for (let i = logs.length - 1; i >= 0; i -= 1) {
-    if (logs[i].seller_id === sellerId) return logs[i];
-  }
-  return null;
-}
-
-function EdgeDetailPopup({
-  log,
-  x,
-  y,
+function FlowAutoFit({
+  nodeCount,
+  totalChatLines,
 }: {
-  log: ConversationLog;
-  x: number;
-  y: number;
+  nodeCount: number;
+  totalChatLines: number;
 }) {
-  const fields = Object.entries(log.extracted_fields ?? {});
-  return (
-    <div
-      className="pointer-events-none absolute z-20 w-64 -translate-x-1/2 -translate-y-full rounded-xl border border-border bg-white p-3 text-left shadow-[var(--shadow-tinted)]"
-      style={{ left: x, top: y - 10 }}
-    >
-      <div className="flex items-baseline gap-1.5">
-        <span className="text-[11px] font-semibold text-text-1">
-          {log.speaker === "buyer" ? "Buyer Agent" : log.seller_name ?? log.seller_id}
-        </span>
-        <span className="text-[10px] text-text-3">· round {log.round}</span>
-      </div>
-      <div className="mt-1 line-clamp-3 text-[11.5px] text-text-2">{log.message}</div>
-      {log.pioneer_labels.length > 0 && (
-        <div className="mt-1.5 flex flex-wrap gap-1">
-          {log.pioneer_labels.map((label) => (
-            <span
-              key={label}
-              className="rounded-full bg-pioneer-soft px-1.5 py-0.5 text-[9.5px] font-medium text-pioneer"
-            >
-              {label.replace(/_/g, " ")}
-            </span>
-          ))}
-        </div>
-      )}
-      {fields.length > 0 && (
-        <div className="mt-1.5 space-y-0.5 font-mono text-[10px] text-text-3">
-          {fields.map(([key, value]) => (
-            <div key={key}>
-              {key}: {String(value)}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
+  const { fitView } = useReactFlow();
+  const prevCount = useRef(nodeCount);
+  const prevChat = useRef(totalChatLines);
+
+  useEffect(() => {
+    if (nodeCount !== prevCount.current) {
+      prevCount.current = nodeCount;
+      const t = setTimeout(() => fitView({ padding: 0.18, duration: 350 }), 60);
+      return () => clearTimeout(t);
+    }
+  }, [nodeCount, fitView]);
+
+  useEffect(() => {
+    if (totalChatLines !== prevChat.current) {
+      prevChat.current = totalChatLines;
+      const t = setTimeout(() => fitView({ padding: 0.18, duration: 400 }), 200);
+      return () => clearTimeout(t);
+    }
+  }, [totalChatLines, fitView]);
+
+  return null;
 }
 
 type Tone = "neutral" | "accent" | "warning" | "success" | "danger";
 
-interface TickerStyle {
-  dot: string;
-  ring: string;
-  text: string;
-  bg: string;
-}
-
-const TONE_STYLES: Record<Tone, TickerStyle> = {
-  neutral: {
-    dot: "bg-text-3",
-    ring: "border-border",
-    text: "text-text-1",
-    bg: "bg-white/95",
-  },
-  accent: {
-    dot: "animate-pulse bg-accent",
-    ring: "border-border",
-    text: "text-text-1",
-    bg: "bg-white/95",
-  },
-  warning: {
-    dot: "bg-warning animate-pulse",
-    ring: "border-amber-200",
-    text: "text-warning",
-    bg: "bg-warning-soft/95",
-  },
-  success: {
-    dot: "bg-success",
-    ring: "border-emerald-200",
-    text: "text-success",
-    bg: "bg-success-soft/95",
-  },
-  danger: {
-    dot: "bg-danger",
-    ring: "border-red-200",
-    text: "text-danger",
-    bg: "bg-danger-soft/95",
-  },
+const TONE_STYLES: Record<Tone, { dot: string; text: string; bg: string; border: string }> = {
+  neutral:  { dot: "bg-text-3",            text: "text-text-2",  bg: "bg-white",        border: "border-border" },
+  accent:   { dot: "bg-accent animate-pulse", text: "text-accent", bg: "bg-accent-soft", border: "border-accent-border" },
+  warning:  { dot: "bg-warning animate-pulse", text: "text-warning", bg: "bg-warning-soft", border: "border-amber-200" },
+  success:  { dot: "bg-success",           text: "text-success", bg: "bg-success-soft",  border: "border-emerald-200" },
+  danger:   { dot: "bg-danger",            text: "text-danger",  bg: "bg-danger-soft",   border: "border-red-200" },
 };
 
 function LiveTicker({
   stageIndex,
   phase,
-  suppliers,
-  conversationLogs,
-  recommendation,
-  activeSeller,
 }: {
   stageIndex: number;
   phase: Props["phase"];
-  suppliers: MatchedSupplier[];
-  conversationLogs: ConversationLog[];
-  recommendation: FinalRecommendation | null;
-  activeSeller: string;
 }) {
-  const msg = tickerMessage(stageIndex, phase, {
-    suppliers,
-    conversationLogs,
-    recommendation,
-    activeSeller,
-  });
+  const msg = tickerMessage(stageIndex, phase);
   const tone: Tone =
-    phase === "approved"
-      ? "success"
-      : phase === "rejected"
-        ? "danger"
-        : phase === "awaiting_approval"
-          ? "warning"
-          : phase === "running"
-            ? "accent"
-            : "neutral";
-  const styles = TONE_STYLES[tone];
+    phase === "approved" ? "success" :
+    phase === "rejected" ? "danger" :
+    phase === "awaiting_approval" ? "warning" :
+    phase === "running" ? "accent" : "neutral";
+  const s = TONE_STYLES[tone];
 
   return (
     <div className="pointer-events-none absolute bottom-4 left-5">
       <div
-        className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] shadow-sm backdrop-blur tabular-nums ${styles.bg} ${styles.ring}`}
+        className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] font-medium shadow-sm backdrop-blur-sm ${s.bg} ${s.border}`}
       >
-        <span className={`h-1.5 w-1.5 rounded-full ${styles.dot}`} />
-        <span className={`font-medium ${styles.text}`}>{msg.title}</span>
+        <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} />
+        <span className={s.text}>{msg.title}</span>
         {msg.detail && (
           <>
             <span className="text-text-3">·</span>
-            <span className="font-mono text-text-2">{msg.detail}</span>
+            <span className="font-mono text-text-3">{msg.detail}</span>
           </>
         )}
       </div>
@@ -388,66 +296,19 @@ function LiveTicker({
   );
 }
 
-function requestNodeLabel(requirements?: StructuredRequirements | null): string {
-  if (!requirements || !requirements.product_type) return "New request";
-  const budget = requirements.budget_eur
-    ? ` · €${requirements.budget_eur}`
-    : "";
-  return `${requirements.product_type}${budget}`;
-}
-
 function tickerMessage(
   stageIndex: number,
   phase: Props["phase"],
-  ctx: {
-    suppliers: MatchedSupplier[];
-    conversationLogs: ConversationLog[];
-    recommendation: FinalRecommendation | null;
-    activeSeller: string;
-  },
 ): { title: string; detail?: string } {
-  if (phase === "approved") {
-    const rec = ctx.recommendation;
-    return {
-      title: "Deal approved",
-      detail: rec?.recommended_seller
-        ? `${rec.recommended_seller} · €${rec.price_eur}`
-        : undefined,
-    };
-  }
-  if (phase === "rejected") return { title: "Deal rejected by human" };
-  if (phase === "awaiting_approval")
-    return { title: "Awaiting human approval", detail: "escalation triggered" };
-  if (stageIndex < 0)
-    return { title: "Idle", detail: "submit a request to begin" };
-  if (stageIndex === 0)
-    return { title: "Extracting structured requirements" };
-  if (stageIndex === 1)
-    return {
-      title: "Ranking suppliers",
-      detail: ctx.suppliers.length
-        ? `${ctx.suppliers.length} candidate${ctx.suppliers.length === 1 ? "" : "s"}`
-        : undefined,
-    };
-  if (stageIndex === 2) {
-    const sellerLogs = ctx.activeSeller
-      ? ctx.conversationLogs.filter((l) => l.seller_id === ctx.activeSeller)
-      : ctx.conversationLogs;
-    const sellerName =
-      sellerLogs.find((l) => l.seller_name)?.seller_name ?? ctx.activeSeller;
-    const round = sellerLogs.length
-      ? Math.max(...sellerLogs.map((l) => l.round))
-      : 1;
-    return {
-      title: sellerName
-        ? `Buyer Agent negotiating with ${sellerName}`
-        : "Buyer Agent negotiating",
-      detail: `Round ${round}`,
-    };
-  }
-  if (stageIndex === 3)
-    return { title: "Validating offers against constraints" };
-  if (stageIndex === 4) return { title: "Checking escalation triggers" };
+  if (phase === "approved") return { title: "Deal approved", detail: "Vendor B · €640" };
+  if (phase === "rejected") return { title: "Deal rejected" };
+  if (phase === "awaiting_approval") return { title: "Awaiting approval", detail: "escalation triggered" };
+  if (stageIndex < 0) return { title: "Ready", detail: "submit a request to begin" };
+  if (stageIndex === 0) return { title: "Extracting requirements" };
+  if (stageIndex === 1) return { title: "Ranking suppliers", detail: "5 candidates" };
+  if (stageIndex === 2) return { title: "Negotiating with sellers", detail: "live" };
+  if (stageIndex === 3) return { title: "Validating offers" };
+  if (stageIndex === 4) return { title: "Escalation check" };
   if (stageIndex === 5) return { title: "Generating audit summary" };
-  return { title: "Pipeline complete" };
+  return { title: "Complete" };
 }
