@@ -228,7 +228,7 @@ export function AgentNetwork({
         data: {
           label: displayName(s.seller_name),
           match: s.match_score,
-          highlight: s.seller_id === bestSellerId && stageIndex >= 1,
+          highlight: canInteract && s.seller_id === activeSeller,
           active: negotiateActive,
           done: negotiateDone,
           selected: canInteract && s.seller_id === activeSeller,
